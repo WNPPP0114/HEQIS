@@ -39,11 +39,11 @@ USER_TRAIN_END_DATE = '20250630'
 PREDICT_DATA_USER_END_DATE = 'latest'
 
 stock_info_dict = {
-    # "物联网": ["远望谷", "东信和平"],
+    "物联网": ["远望谷", "东信和平"],
     # "军工": ["长城军工", "烽火电子", "中兵红箭"],
     "培育钻石": ["黄河旋风"],
-    # "港口": ["凤凰航运"],
-    # "传媒": ["新华传媒", "吉视传媒"],
+    "港口": ["凤凰航运"],
+    "传媒": ["新华传媒", "吉视传媒"], # 添加了几个股票以便测试多只获取
     # "零售": ["全新好", "永辉超市", "中百集团", "东百集团"],
 }
 
@@ -105,14 +105,24 @@ def get_ts_code_from_name(stock_name: str, stock_basic_df: pd.DataFrame) -> Tupl
 
 def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
     df = df_input.copy()
-    required_ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    # 添加 pctChg 到必需列，因为技术指标可能会用到价格变化率
+    required_ohlcv_cols = ['open', 'high', 'low', 'close', 'volume', 'pctChg']
     for col in required_ohlcv_cols:
         if col not in df.columns:
-            print(f"警告: 计算技术指标前, DataFrame缺少必需的OHLCV列: {col}。跳过指标计算。")
-            return pd.DataFrame()
+            # 如果缺少 pctChg，可以尝试根据 close 和 pre_close 计算
+            if col == 'pctChg' and 'close' in df.columns and 'pre_close' in df.columns:
+                df['pctChg'] = (df['close'] / df['pre_close'].shift(1) - 1) * 100  # 假设 pre_close 是前一天的收盘价
+                df['pctChg'].iloc[0] = 0  # 第一个交易日的涨跌幅设为0或NaN
+            else:
+                print(f"警告: 计算技术指标前, DataFrame缺少必需的列: {col}。跳过指标计算。")
+                return pd.DataFrame()
         # MODIFIED: 在函数入口再次强制转换，作为双重保险
         df[col] = pd.to_numeric(df[col], errors='coerce')
-    df.dropna(subset=required_ohlcv_cols, inplace=True)
+
+    # 重新定义需要进行dropna的子集，不包括pctChg，因为它在手动计算后可能开头有NaN
+    dropna_subset_cols = ['open', 'high', 'low', 'close', 'volume']
+    df.dropna(subset=dropna_subset_cols, inplace=True)
+
     if df.empty: return df
 
     # 确保所有计算列都是浮点数类型
@@ -121,8 +131,8 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
     lo = df['low'].astype(float)
     cl = df['close'].astype(float)
     vo = df['volume'].astype(float)
+    pct_change = df['pctChg'].astype(float)  # 使用经过复权或原始的pctChg
 
-    # --- 优化: 创建一个字典来存储所有新指标 ---
     indicators_dict = {}
 
     try:
@@ -154,7 +164,6 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
         indicators_dict['macds_10_20_9'] = macd_dea_10_20
         indicators_dict['macdh_10_20_9'] = macd_hist_10_20
 
-        # ***** MODIFIED: 新增两种KDJ参数计算 *****
         # KDJ (14, 3, 3) - 经典参数
         stochk_14, stochd_14 = talib.STOCH(hi, lo, cl, fastk_period=14, slowk_period=3, slowk_matype=0, slowd_period=3,
                                            slowd_matype=0)
@@ -184,8 +193,8 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
         indicators_dict['bbu_20_2'] = bbu
         indicators_dict['bbm_20_2'] = bbm
         indicators_dict['bbl_20_2'] = bbl
-        indicators_dict['bbw_20_2'] = (indicators_dict['bbu_20_2'] - indicators_dict['bbl_20_2']) / (indicators_dict[
-                                                                                                         'bbm_20_2'] + 1e-9)
+        indicators_dict['bbw_20_2'] = (indicators_dict['bbu_20_2'] - indicators_dict['bbl_20_2']) / (
+                    indicators_dict['bbm_20_2'] + 1e-9)
         indicators_dict['stddev_5d'] = talib.STDDEV(cl, timeperiod=5, nbdev=1)
 
         # --- 3. 量能指标 ---
@@ -193,16 +202,21 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
         indicators_dict['ad_line'] = talib.AD(hi, lo, cl, vo)
 
         # --- 4. 高频与短期行为特征 ---
-        pct_change = cl.pct_change()
-        indicators_dict['pct_change'] = pct_change
+        # pct_change = cl.pct_change() # 不再在这里重新计算，使用传入的pctChg
+        indicators_dict['pct_change'] = pct_change  # 直接使用传入的pctChg
+
+        # 注意：连续上涨/下跌天数、最大涨跌幅、range_avg_3d、pos_in_Nd_range、ema_div_ema 等指标会基于复权后的价格计算
         is_up = (cl > op).astype(int)
         consecutive_up_days = is_up.groupby((is_up != is_up.shift()).cumsum()).cumcount() + 1
         indicators_dict['consecutive_up_days'] = consecutive_up_days * is_up
         is_down = (cl < op).astype(int)
         consecutive_down_days = is_down.groupby((is_down != is_down.shift()).cumsum()).cumcount() + 1
         indicators_dict['consecutive_down_days'] = consecutive_down_days * is_down
+
+        # 基于复权后的pctChg计算滚动指标
         indicators_dict['max_gain_3d'] = pct_change.rolling(window=3).max()
         indicators_dict['max_loss_3d'] = pct_change.rolling(window=3).min()
+
         rolling_high_5d = cl.rolling(window=5).max()
         indicators_dict['break_high_5d_count'] = (cl >= rolling_high_5d).rolling(window=5).sum()
         indicators_dict['range_avg_3d'] = (hi - lo).rolling(window=3).mean()
@@ -218,14 +232,14 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
 
         # --- 6. 成交量精细化特征 ---
         indicators_dict['vol_roc_10'] = talib.ROC(vo, timeperiod=10)
-        indicators_dict['pv_consistency'] = np.sign(pct_change) * np.sign(vo.pct_change())
+        indicators_dict['pv_consistency'] = np.sign(pct_change) * np.sign(vo.pct_change())  # 使用复权后的pct_change
         indicators_dict['obv_roc_10'] = talib.ROC(indicators_dict['obv'], timeperiod=10)
 
         # --- 7. 波动性高级衡量 ---
         indicators_dict['sharpe_like_20d'] = (pct_change.rolling(window=20).mean()) / (
-                pct_change.rolling(window=20).std() + 1e-9)
-        indicators_dict['skew_20d'] = pct_change.rolling(window=20).skew()
-        indicators_dict['kurt_20d'] = pct_change.rolling(window=20).kurt()
+                pct_change.rolling(window=20).std() + 1e-9)  # 使用复权后的pct_change
+        indicators_dict['skew_20d'] = pct_change.rolling(window=20).skew()  # 使用复权后的pct_change
+        indicators_dict['kurt_20d'] = pct_change.rolling(window=20).kurt()  # 使用复权后的pct_change
 
         # --- 8. K线实体特征 ---
         indicators_dict['body_size'] = abs(cl - op)
@@ -233,7 +247,8 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
         indicators_dict['lower_shadow'] = np.minimum(op, cl) - lo
         indicators_dict['close_pos_in_day_range'] = (cl - lo) / (hi - lo + 1e-9)
 
-
+        # --- 9. K线形态 (自动识别) ---
+        #暂时删去
 
         indicators_df = pd.DataFrame(indicators_dict, index=df.index)
         df_with_indicators = pd.concat([df, indicators_df], axis=1)
@@ -267,7 +282,9 @@ def robust_clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     # 1. 确保日期列是标准格式
     if 'date' in df_cleaned.columns:
         df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], format='%Y%m%d', errors='coerce').dt.strftime('%Y%m%d')
-        df_cleaned.dropna(subset=['date'], inplace=True)  # 删除无法解析的日期行
+        # 保留可以解析的日期行，无法解析的日期行可能会影响排序和连续性，但这里不再删除
+        # 仅删除date为NaT的行
+        df_cleaned.dropna(subset=['date'], inplace=True)
 
     # 2. 定义所有应该为数值类型的列
     numeric_cols = [
@@ -288,26 +305,42 @@ def robust_clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def preprocess_raw_df(df_raw_daily: pd.DataFrame, df_raw_basic: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     if df_raw_daily.empty: return pd.DataFrame()
     df_daily = df_raw_daily.rename(columns={'vol': 'volume', 'trade_date': 'date', 'pct_chg': 'pctChg'})
+
+    # 确保包含 pre_close，因为它用于后续 pctChg 的重新计算
     daily_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
     if 'pctChg' in df_daily.columns: daily_cols.append('pctChg')
     if 'pre_close' in df_daily.columns: daily_cols.append('pre_close')
-    missing_cols_daily = [col for col in daily_cols if col not in df_daily.columns]
-    if missing_cols_daily:
-        print(f"错误: 原始日线数据缺少必需的列: {missing_cols_daily}。跳过预处理。")
+
+    # 检查是否有重复列名
+    if len(set(daily_cols)) != len(daily_cols):
+        print(f"警告: preprocess_raw_df 发现重复列名，请检查输入。")
         return pd.DataFrame()
-    df_daily = df_daily[daily_cols]
-    df_daily['date'] = df_daily['date'].astype(str)
-    df_merged = df_daily.copy()
+
+    # 确保只选择存在的列，避免 KeyError
+    daily_cols_existing = [col for col in daily_cols if col in df_daily.columns]
+    df_daily = df_daily[daily_cols_existing].copy()
+
+    df_merged = df_daily.copy()  # 从 df_daily 复制，而不是重新创建空的 df_merged
+
+    # 合并基本数据 (如果存在且有效)
     if df_raw_basic is not None and not df_raw_basic.empty:
         df_basic_renamed = df_raw_basic.rename(columns={'trade_date': 'date', 'turnover_rate': 'turn'})
         basic_cols = ['date', 'turn']
-        missing_cols_basic = [col for col in basic_cols if col not in df_basic_renamed.columns]
-        if not missing_cols_basic:
-            df_basic_selected = df_basic_renamed[basic_cols].copy()
+        basic_cols_existing = [col for col in basic_cols if col in df_basic_renamed.columns]
+
+        if basic_cols_existing:
+            df_basic_selected = df_basic_renamed[basic_cols_existing].copy()
             df_basic_selected['date'] = df_basic_selected['date'].astype(str)
-            df_merged = pd.merge(df_daily, df_basic_selected, on='date', how='left')
+            # 确保合并时不会引入重复的date列
+            df_merged = pd.merge(df_daily, df_basic_selected, on='date', how='left', suffixes=('', '_drop')).filter(
+                regex='^(?!.*_drop)')
         else:
-            print(f"警告: 原始基本数据缺少必需的列: {missing_cols_basic}。将不合并这些基本指标。")
+            print(f"警告: 原始基本数据缺少必需的列: {basic_cols}。将不合并这些基本指标。")
+
+    # 强制转换为字符串以确保后续处理一致
+    if 'date' in df_merged.columns:
+        df_merged['date'] = df_merged['date'].astype(str)
+
     return df_merged
 
 
@@ -374,10 +407,16 @@ def fetch_and_process_stock_data(ts_code: str,
 
         if is_up_to_date_via_meta: return True
 
+        # 读取现有数据时，只读取原始数据，不包含指标
         if os.path.exists(predict_filepath):
             try:
                 raw_cols_to_read = ['date', 'open', 'high', 'low', 'close', 'pre_close', 'volume', 'pctChg', 'turn']
-                temp_df = pd.read_csv(predict_filepath, dtype={'date': str}, usecols=lambda c: c in raw_cols_to_read)
+
+                # 仅选择文件中实际存在的列来读取
+                cols_in_file = pd.read_csv(predict_filepath, nrows=0).columns.tolist()
+                actual_raw_cols_to_read = [col for col in raw_cols_to_read if col in cols_in_file]
+
+                temp_df = pd.read_csv(predict_filepath, dtype={'date': str}, usecols=actual_raw_cols_to_read)
 
                 if not temp_df.empty and 'date' in temp_df.columns:
                     df_existing_raw = temp_df.copy()
@@ -413,6 +452,7 @@ def fetch_and_process_stock_data(ts_code: str,
         if use_adj_for_this_stock and stock_adj_factor_df is not None and not stock_adj_factor_df.empty:
             temp_df = stock_adj_factor_df[stock_adj_factor_df['trade_date'] <= user_train_end_date_str].copy()
             if not temp_df.empty:
+                # 按日期降序排列，取第一个，即离基准日最近的那个
                 base_adjustment_factor = temp_df.sort_values(by='trade_date', ascending=False).iloc[0]['adj_factor']
                 print(f"  -> 复权模式: 已确定基准日 {user_train_end_date_str} 的复权因子为: {base_adjustment_factor}")
             else:
@@ -454,8 +494,9 @@ def fetch_and_process_stock_data(ts_code: str,
         df_combined_raw = pd.DataFrame()
         if not df_new_processed_segment.empty:
             if not df_existing_raw.empty:
-                df_combined_raw = pd.concat([df_existing_raw, df_new_processed_segment]).drop_duplicates(
-                    subset=['date'], keep='last')
+                # 确保合并前按日期排序，再去除重复项
+                df_combined_raw = pd.concat([df_existing_raw, df_new_processed_segment]).sort_values(
+                    'date').drop_duplicates(subset=['date'], keep='last')
             else:
                 df_combined_raw = df_new_processed_segment
         else:
@@ -473,20 +514,50 @@ def fetch_and_process_stock_data(ts_code: str,
         # --- 手动复权计算 ---
         if use_adj_for_this_stock and stock_adj_factor_df is not None and not stock_adj_factor_df.empty:
             print(f"  -> 正在对 {len(df_combined_raw)} 行数据进行手动前复权计算...")
-            df_combined_raw['trade_date_dt'] = pd.to_datetime(df_combined_raw['date'], format='%Y%m%d')
-            stock_adj_factor_df['trade_date_dt'] = pd.to_datetime(stock_adj_factor_df['trade_date'], format='%Y%m%d')
 
+            # 确保合并前日期格式一致
+            df_combined_raw['trade_date_dt'] = pd.to_datetime(df_combined_raw['date'], format='%Y%m%d', errors='coerce')
+            stock_adj_factor_df['trade_date_dt'] = pd.to_datetime(stock_adj_factor_df['trade_date'], format='%Y%m%d',
+                                                                  errors='coerce')
+
+            # 使用左合并，保留所有日线数据日期
             df_with_adj = pd.merge(df_combined_raw, stock_adj_factor_df[['trade_date_dt', 'adj_factor']],
                                    on='trade_date_dt', how='left')
             df_with_adj.sort_values(by='trade_date_dt', inplace=True)
 
+            # 核心修复：填充缺失的复权因子
+            # 1. 向前填充，处理停牌日
             df_with_adj['adj_factor'].fillna(method='ffill', inplace=True)
-            df_with_adj.dropna(subset=['adj_factor'], inplace=True)  # 如果开头仍有NaN则删除
+            # 2. 向后填充（处理数据最开头的缺失），用 1.0 填充，假设在那之前没有复权
+            df_with_adj['adj_factor'].fillna(1.0, inplace=True)
+
+            # 转换为数值类型，errors='coerce' 将非数字转换为 NaN
+            for col in ['open', 'high', 'low', 'close', 'pre_close']:
+                df_with_adj[col] = pd.to_numeric(df_with_adj[col], errors='coerce')
+
+            df_with_adj['adj_factor'] = pd.to_numeric(df_with_adj['adj_factor'], errors='coerce')
+
+            # 应用公式
+            # 注意：这里需要处理 adj_factor 自身也可能是 NaN 的情况 (尽管上面填充了 1.0)
+            # 并且要避免除以0或NaN
+            valid_adj_mask = (df_with_adj['adj_factor'].notna()) & (base_adjustment_factor != 0) & (
+                pd.notna(base_adjustment_factor))
 
             for col in ['open', 'high', 'low', 'close', 'pre_close']:
-                df_with_adj[col] = pd.to_numeric(df_with_adj[col], errors='coerce') * pd.to_numeric(
-                    df_with_adj['adj_factor'], errors='coerce') / base_adjustment_factor
+                df_with_adj.loc[valid_adj_mask, col] = df_with_adj.loc[valid_adj_mask, col] * df_with_adj.loc[
+                    valid_adj_mask, 'adj_factor'] / base_adjustment_factor
 
+            # 重新计算 pct_chg，因为原始 pctChg 是基于不复权价格
+            df_with_adj['pre_close_shifted'] = df_with_adj['close'].shift(1)
+            valid_pct_chg_mask = (df_with_adj['pre_close_shifted'].notna()) & (
+                        df_with_adj['pre_close_shifted'] != 0) & (df_with_adj['close'].notna())
+            df_with_adj['pctChg'] = np.nan  # Initialize with NaN
+            df_with_adj.loc[valid_pct_chg_mask, 'pctChg'] = (df_with_adj.loc[valid_pct_chg_mask, 'close'] /
+                                                             df_with_adj.loc[
+                                                                 valid_pct_chg_mask, 'pre_close_shifted'] - 1) * 100
+            df_with_adj.drop(columns=['pre_close_shifted'], inplace=True, errors='ignore')
+
+            # 删除临时列
             df_combined_raw = df_with_adj.drop(columns=['trade_date_dt', 'adj_factor'])
 
         print(f"股票 {stock_name} ({ts_code}): 正在对合并后的 {len(df_combined_raw)} 行完整数据进行彻底清洗...")
@@ -497,6 +568,7 @@ def fetch_and_process_stock_data(ts_code: str,
             return False
 
         print(f"股票 {stock_name} ({ts_code}): 在清洗后的完整数据上重新计算所有技术指标...")
+        # calculate_technical_indicators 现在会使用复权或不复权后的OHLCV和重新计算的pctChg
         df_with_indicators_full = calculate_technical_indicators(df_cleaned_full)
 
         if df_with_indicators_full.empty:
@@ -506,7 +578,9 @@ def fetch_and_process_stock_data(ts_code: str,
         df_processed_final = df_with_indicators_full
 
         if len(df_processed_final) > INDICATOR_WARMUP_PERIOD:
-            df_processed_final = df_processed_final.iloc[INDICATOR_WARMUP_PERIOD:].reset_index(drop=True)
+            # Ensure we slice after sorting
+            df_processed_final = df_processed_final.sort_values('date').iloc[INDICATOR_WARMUP_PERIOD:].reset_index(
+                drop=True)
             print(
                 f"股票 {stock_name} ({ts_code}): 已应用 {INDICATOR_WARMUP_PERIOD} 天的指标预热期，剩余 {len(df_processed_final)} 条有效数据。")
         else:
@@ -641,14 +715,13 @@ if __name__ == "__main__":
 
     # --- 一次性获取所有待处理股票的复权因子 ---
     all_adj_factors_df = None
-    if USE_ADJUSTED_DATA:
+    # 检查 USE_ADJUSTED_DATA 是否为 True 且 pro 对象已成功初始化
+    if USE_ADJUSTED_DATA and pro is not None:
         print("\n正在获取所有待处理股票的复权因子（这可能需要一些时间）...")
         ts_codes_to_fetch = []
         for stock_item in stocks_to_process:
-            # ==================== MODIFICATION START ====================
-            # 正确接收 get_ts_code_from_name 返回的两个值
+            # Corrected unpacking here
             ts_code, _ = get_ts_code_from_name(stock_item['name'], all_stock_basic)
-            # ===================== MODIFICATION END =====================
             if ts_code:
                 ts_codes_to_fetch.append(ts_code)
 
@@ -662,7 +735,10 @@ if __name__ == "__main__":
                 print(f"成功获取 {len(all_adj_factors_df)} 条复权因子记录。")
             except Exception as e:
                 print(f"警告：获取复权因子失败: {e}。将继续使用不复权数据。")
-                USE_ADJUSTED_DATA = False
+                USE_ADJUSTED_DATA = False  # 获取失败则降级为不复权
+        else:
+            print("警告：没有找到需要获取复权因子的股票 TS 代码。将继续使用不复权数据。")
+            USE_ADJUSTED_DATA = False  # 没有ts_code则降级
 
     total_stocks_count = len(stocks_to_process)
     num_cores_to_use = min(args.num_cores, total_stocks_count)
