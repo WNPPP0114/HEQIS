@@ -20,7 +20,6 @@ import sys
 import logging
 import traceback
 from tqdm import tqdm
-# 【修改】将导入的函数名从 gamma_loss_function 改为 t3vae_loss_function
 from models.pretrainer import (
     CAE_for_pretrain, t3VAE_for_pretrain, t3vae_loss_function,
     plot_pretrain_loss
@@ -75,19 +74,18 @@ class MAA_time_series(MAABase):
         self.gan_weights = gan_weights;
         self.init_hyperparameters()
 
-    def run_pretraining_if_needed(self, all_stock_files: List[str], pretrainer_ckpt_path: str, pretrain_epochs: int):
+    def run_pretraining_if_needed(self, all_stock_files: List[str], pretrainer_ckpt_path: str, pretrain_epochs: int,
+                                  specific_window_size: int):
         pretrainer_type = self.args.pretrainer_type
-        print(f"\n--- 开始执行 {pretrainer_type.upper()} 预训练 ---")
 
         all_datasets = []
-        mpd_indices = [i for i, name in enumerate(self.generator_names) if name == 'mpd']
-        if not mpd_indices: return
-        window_size = self.window_sizes[mpd_indices[0]]
+        window_size = specific_window_size
+
         temp_df = pd.read_csv(all_stock_files[0])
         temp_feature_cols = [col for col in temp_df.columns if col not in ['date', 'direction']]
         num_features = len(temp_feature_cols)
 
-        for stock_file in tqdm(all_stock_files, desc=f"{pretrainer_type.upper()} 数据加载"):
+        for stock_file in tqdm(all_stock_files, desc=f"数据加载 (ws={window_size})"):
             df = pd.read_csv(stock_file)
             features = df[temp_feature_cols].values
             scaler = MinMaxScaler(feature_range=(0, 1))
@@ -97,7 +95,9 @@ class MAA_time_series(MAABase):
                 image_data = scaled_features[i - window_size: i, :].reshape(1, window_size, num_features)
                 images.append(image_data)
             if images: all_datasets.append(TensorDataset(torch.from_numpy(np.array(images)).float()))
-        if not all_datasets: print("错误: 未能为预训练创建任何数据。"); return
+        if not all_datasets:
+            print(f"错误: 未能为 window_size={window_size} 创建任何预训练数据。")
+            return
 
         full_dataset = ConcatDataset(all_datasets)
         dataloader = DataLoader(full_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -107,40 +107,39 @@ class MAA_time_series(MAABase):
             criterion = nn.MSELoss()
         elif pretrainer_type == 't3vae':
             pretrain_model = t3VAE_for_pretrain(input_height=window_size, input_width=num_features).to(self.device)
-            # 【修改】使用新的 t3vae_loss_function
             criterion = t3vae_loss_function
         else:
             raise ValueError(f"未知的预训练器类型: {pretrainer_type}")
 
         optimizer = torch.optim.Adam(pretrain_model.parameters(), lr=1e-3)
-        pretrain_model.train();
+        pretrain_model.train()
         loss_history = []
-        with tqdm(total=pretrain_epochs * len(dataloader), desc=f"{pretrainer_type.upper()} 预训练") as pbar:
+        with tqdm(total=pretrain_epochs * len(dataloader),
+                  desc=f"{pretrainer_type.upper()} 预训练 (ws={window_size})") as pbar:
             for epoch in range(pretrain_epochs):
-                epoch_loss = 0.0;
+                epoch_loss = 0.0
                 num_batches = 0
                 for batch_idx, batch in enumerate(dataloader):
-                    images = batch[0].to(self.device);
+                    images = batch[0].to(self.device)
                     optimizer.zero_grad()
                     recon_images, mu, logvar = pretrain_model(images)
                     if pretrainer_type == 'cae':
                         loss = criterion(recon_images, images)
                     else:
-                        loss = criterion(recon_images, images, mu, logvar)  # criterion 现在是 t3vae_loss_function
-                    loss.backward();
+                        loss = criterion(recon_images, images, mu, logvar)
+                    loss.backward()
                     optimizer.step()
-                    epoch_loss += loss.item();
+                    epoch_loss += loss.item()
                     num_batches += 1
                     pbar.set_postfix(Epoch=f'{epoch + 1}/{pretrain_epochs}', Loss=f'{epoch_loss / num_batches:.6f}')
                     pbar.update(1)
-                avg_epoch_loss = epoch_loss / num_batches;
+                avg_epoch_loss = epoch_loss / num_batches
                 loss_history.append(avg_epoch_loss)
 
         os.makedirs(os.path.dirname(pretrainer_ckpt_path), exist_ok=True)
         torch.save(pretrain_model.encoder.state_dict(), pretrainer_ckpt_path)
-        plot_pretrain_loss(loss_history, self.output_dir, pretrainer_type)
+        plot_pretrain_loss(loss_history, self.output_dir, f"{pretrainer_type}_ws{window_size}")
 
-    # ... 其他所有方法保持不变，此处为了简洁而省略 ...
     @log_execution_time
     def process_data(self, train_csv_path, predict_csv_path, target_column, exclude_columns):
         train_df = pd.read_csv(train_csv_path);
@@ -218,33 +217,58 @@ class MAA_time_series(MAABase):
     @log_execution_time
     def init_model(self, num_cls):
         self.generators, self.discriminators = [], []
+
         for i, name in enumerate(self.generator_names):
-            input_dim = self.train_x_all[i].shape[-1];
+            input_dim = self.train_x_all[i].shape[-1]
             y_dim = self.train_y_all.shape[-1]
             GenClass = self.generator_dict.get(name)
             if GenClass is None: sys.exit(1)
+
+            init_kwargs = {'use_rope': self.args.use_rope}
+
             if name == "mpd":
-                generator_instance = GenClass(input_height=self.window_sizes[i], input_width=len(self.feature_columns),
-                                              num_classes=num_cls, pretrainer_type=self.args.pretrainer_type)
-                if hasattr(self.args, 'pretrainer_ckpt_path') and self.args.pretrainer_ckpt_path and os.path.exists(
-                        self.args.pretrainer_ckpt_path):
+                current_ws = self.window_sizes[i]
+                init_kwargs.update({
+                    'input_height': current_ws,
+                    'input_width': len(self.feature_columns),
+                    'num_classes': num_cls,
+                    'pretrainer_type': self.args.pretrainer_type
+                })
+                generator_instance = GenClass(**init_kwargs)
+
+                # 为当前MPD模型构造其特定的预训练权重路径
+                pretrainer_ckpt_path = os.path.join(
+                    self.args.output_dir,
+                    f"{self.args.pretrainer_type}_encoder_ws{current_ws}.pt"
+                )
+
+                if os.path.exists(pretrainer_ckpt_path):
                     try:
                         generator_instance.pretrainer_encoder.load_state_dict(
-                            torch.load(self.args.pretrainer_ckpt_path, map_location=self.device))
+                            torch.load(pretrainer_ckpt_path, map_location=self.device))
                         print(
-                            f"成功为 Generator_mpd (G{i + 1}) 加载了预训练的 {self.args.pretrainer_type.upper()} 编码器权重。")
+                            f"成功为 Generator_mpd (G{i + 1}, ws={current_ws}) 加载了预训练权重。")
                     except Exception as e:
-                        print(f"警告: 为 G{i + 1} 加载预训练编码器权重失败: {e}")
+                        print(f"警告: 为 G{i + 1} (ws={current_ws}) 加载预训练权重 '{pretrainer_ckpt_path}' 失败: {e}")
+                else:
+                    print(
+                        f"信息: 未找到 G{i + 1} (ws={current_ws}) 对应的预训练权重 '{pretrainer_ckpt_path}'，将随机初始化。")
+
             elif name in ["transformer", "transformer_deep"]:
-                generator_instance = GenClass(input_dim=input_dim, output_len=y_dim)
+                init_kwargs.update({'input_dim': input_dim, 'output_len': y_dim})
+                generator_instance = GenClass(**init_kwargs)
             elif name == "dct":
-                generator_instance = GenClass(input_dim=input_dim, out_size=y_dim, num_classes=num_cls)
+                init_kwargs.update({'input_dim': input_dim, 'out_size': y_dim, 'num_classes': num_cls})
+                generator_instance = GenClass(**init_kwargs)
             elif name == "rnn":
-                generator_instance = GenClass(input_size=input_dim)
+                init_kwargs.update({'input_size': input_dim})
+                generator_instance = GenClass(**init_kwargs)
             else:
-                generator_instance = GenClass(input_size=input_dim, out_size=y_dim)
+                init_kwargs.update({'input_size': input_dim, 'out_size': y_dim})
+                generator_instance = GenClass(**init_kwargs)
+
             self.generators.append(generator_instance.to(self.device))
-            DisClass = self.discriminator_dict.get("default");
+            DisClass = self.discriminator_dict.get("default")
             if DisClass is None: sys.exit(1)
             self.discriminators.append(
                 DisClass(input_dim=self.window_sizes[i] + 1, out_size=y_dim, num_cls=num_cls).to(self.device))
@@ -308,7 +332,8 @@ class MAA_time_series(MAABase):
                     df_out.to_csv(out_path, index=False)
                     print(f"已保存 G{i + 1} 的对比: {out_path}")
                 except Exception as e:
-                    print(f"错误: 为 G{i + 1} 生成预测CSV时出错: {e}"); traceback.print_exc()
+                    print(f"错误: 为 G{i + 1} 生成预测CSV时出错: {e}");
+                    traceback.print_exc()
 
     def pred(self, date_series=None):
         gen_dir = os.path.join(self.ckpt_dir, "generators")
@@ -327,7 +352,7 @@ class MAA_time_series(MAABase):
         if loaded_count == 0: print("错误: 未能加载任何模型。"); return None
         is_mpd_run = any("mpd" in name for name in self.generator_names)
         train_xes, test_xes = (self.train_x_img_all, self.test_x_img_all) if is_mpd_run else (
-        self.train_x_all, self.test_x_all)
+            self.train_x_all, self.test_x_all)
         results = evaluate_best_models(self.generators, best_model_state, train_xes, self.train_y_all, test_xes,
                                        self.test_y_all, self.y_scaler, self.output_dir, self.window_sizes,
                                        date_series=date_series)
@@ -358,9 +383,11 @@ class MAA_time_series(MAABase):
             gen_name, window_size, generator = self.generator_names[i], self.window_sizes[i], self.generators[i]
             is_mpd_model = "mpd" in gen_name
             try:
-                generator.load_state_dict(state); generator.eval()
+                generator.load_state_dict(state);
+                generator.eval()
             except Exception as e:
-                print(f"错误: 加载 G{i + 1} 状态失败: {e}"); continue
+                print(f"错误: 加载 G{i + 1} 状态失败: {e}");
+                continue
             print(f"正在处理模型: G{i + 1} ({gen_name})");
             signals = []
             for j in range(loop_start_index, len(df_predict)):

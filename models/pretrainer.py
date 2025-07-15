@@ -155,7 +155,8 @@ def plot_pretrain_loss(loss_history, output_dir, pretrainer_type):
     output_path = os.path.join(output_dir, "pretrain_vis", f"{pretrainer_type}_pretrain_loss_curve.png")
     plt.style.use('seaborn-v0_8-whitegrid')
     try:
-        plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'sans-serif']; plt.rcParams[
+        plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'sans-serif'];
+        plt.rcParams[
             'axes.unicode_minus'] = False
     except:
         print("警告: 未找到中文字体。")
@@ -172,13 +173,27 @@ def plot_pretrain_loss(loss_history, output_dir, pretrainer_type):
     print(f"已保存{pretrainer_type.upper()}预训练Loss曲线图: {output_path}")
 
 
-def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_type, num_samples=3):
-    print(f"\n--- 开始生成{pretrainer_type.upper()}的重构可视化图像 ---")
-    mpd_indices = [i for i, name in enumerate(ts_maa_instance.generator_names) if name == 'mpd']
-    if not mpd_indices: return
-    mpd_idx = mpd_indices[0]
+def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_type, num_samples=3,
+                             target_window_size=None):
+    if target_window_size is None:
+        print("错误: visualize_reconstruction 需要 target_window_size 参数。")
+        return
+
+    print(f"\n--- 开始为 ws={target_window_size} 生成{pretrainer_type.upper()}的重构可视化图像 ---")
+
+    try:
+        mpd_idx = ts_maa_instance.window_sizes.index(target_window_size)
+        if ts_maa_instance.generator_names[mpd_idx] != 'mpd':
+            print(f"警告: ws={target_window_size} 对应的模型不是 'mpd'。")
+            return
+    except ValueError:
+        print(f"错误: 在配置中找不到 window_size={target_window_size}。")
+        return
+
     if not hasattr(ts_maa_instance, 'test_x_img_all') or len(ts_maa_instance.test_x_img_all) <= mpd_idx or \
-            ts_maa_instance.test_x_img_all[mpd_idx].nelement() == 0: return
+            ts_maa_instance.test_x_img_all[mpd_idx].nelement() == 0:
+        print(f"信息: ws={target_window_size} 对应的测试数据为空，跳过重构可视化。")
+        return
 
     window_size = ts_maa_instance.window_sizes[mpd_idx];
     num_features = ts_maa_instance.test_x_img_all[mpd_idx].shape[-1]
@@ -192,9 +207,11 @@ def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_t
 
     try:
         vis_model.encoder.load_state_dict(
-            torch.load(pretrainer_ckpt_path, map_location=ts_maa_instance.device)); vis_model.eval()
+            torch.load(pretrainer_ckpt_path, map_location=ts_maa_instance.device));
+        vis_model.eval()
     except Exception as e:
-        print(f"错误: 加载预训练权重 '{pretrainer_ckpt_path}' 失败: {e}"); return
+        print(f"错误: 加载预训练权重 '{pretrainer_ckpt_path}' 失败: {e}");
+        return
 
     test_images = ts_maa_instance.test_x_img_all[mpd_idx];
     num_test_samples = test_images.shape[0]
@@ -202,7 +219,8 @@ def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_t
     if actual_num_samples == 0: return
     sample_indices = np.random.choice(num_test_samples, actual_num_samples, replace=False)
 
-    vis_dir = os.path.join(ts_maa_instance.output_dir, "pretrain_vis", f"{pretrainer_type}_reconstruction")
+    vis_dir = os.path.join(ts_maa_instance.output_dir, "pretrain_vis",
+                           f"{pretrainer_type}_reconstruction_ws{target_window_size}")
     os.makedirs(vis_dir, exist_ok=True)
     for sample_idx in sample_indices:
         with torch.no_grad():
@@ -211,7 +229,8 @@ def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_t
         original_np = original_image.cpu().numpy().squeeze();
         reconstructed_np = reconstructed_image.cpu().numpy().squeeze()
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5));
-        fig.suptitle(f'{pretrainer_type.upper()} Reconstruction - Sample {sample_idx}', fontsize=16)
+        fig.suptitle(f'{pretrainer_type.upper()} Reconstruction (ws={target_window_size}) - Sample {sample_idx}',
+                     fontsize=16)
         im1 = ax1.imshow(original_np, cmap='viridis', aspect='auto');
         ax1.set_title('Original Input');
         ax1.set_xlabel('Features');
@@ -241,7 +260,8 @@ def visualize_feature_correlation(ts_maa_instance):
     corr_matrix = df_features.corr(method='pearson')
     plt.style.use('seaborn-v0_8-whitegrid')
     try:
-        plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'sans-serif']; plt.rcParams[
+        plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'sans-serif'];
+        plt.rcParams[
             'axes.unicode_minus'] = False
     except:
         pass
@@ -261,14 +281,28 @@ def visualize_feature_correlation(ts_maa_instance):
     print(f"已成功保存原始特征相关性热力图至: {save_path}")
 
 
-def visualize_encoded_feature_correlation(ts_maa_instance, pretrainer_ckpt_path, pretrainer_type):
+def visualize_encoded_feature_correlation(ts_maa_instance, pretrainer_ckpt_path, pretrainer_type,
+                                          target_window_size=None):
     from tqdm import tqdm
-    print(f"\n--- 开始生成{pretrainer_type.upper()}编码后特征的相关性热力图 ---")
-    mpd_indices = [i for i, name in enumerate(ts_maa_instance.generator_names) if name == 'mpd']
-    if not mpd_indices: return
-    mpd_idx = mpd_indices[0]
+    if target_window_size is None:
+        print("错误: visualize_encoded_feature_correlation 需要 target_window_size 参数。")
+        return
+
+    print(f"\n--- 开始为 ws={target_window_size} 生成{pretrainer_type.upper()}编码后特征的相关性热力图 ---")
+
+    try:
+        mpd_idx = ts_maa_instance.window_sizes.index(target_window_size)
+        if ts_maa_instance.generator_names[mpd_idx] != 'mpd':
+            print(f"警告: ws={target_window_size} 对应的模型不是 'mpd'。")
+            return
+    except ValueError:
+        print(f"错误: 在配置中找不到 window_size={target_window_size}。")
+        return
+
     if not hasattr(ts_maa_instance, 'train_x_img_all') or len(ts_maa_instance.train_x_img_all) <= mpd_idx or \
-            ts_maa_instance.train_x_img_all[mpd_idx].nelement() == 0: return
+            ts_maa_instance.train_x_img_all[mpd_idx].nelement() == 0:
+        print(f"信息: ws={target_window_size} 对应的训练数据为空，跳过编码后特征相关性可视化。")
+        return
 
     window_size = ts_maa_instance.window_sizes[mpd_idx];
     num_features = ts_maa_instance.train_x_img_all[mpd_idx].shape[-1]
@@ -281,18 +315,22 @@ def visualize_encoded_feature_correlation(ts_maa_instance, pretrainer_ckpt_path,
         return
 
     try:
-        encoder.load_state_dict(torch.load(pretrainer_ckpt_path, map_location=ts_maa_instance.device)); encoder.eval()
+        encoder.load_state_dict(torch.load(pretrainer_ckpt_path, map_location=ts_maa_instance.device));
+        encoder.eval()
     except Exception as e:
-        print(f"错误: 加载预训练权重 '{pretrainer_ckpt_path}' 失败: {e}"); return
+        print(f"错误: 加载预训练权重 '{pretrainer_ckpt_path}' 失败: {e}");
+        return
 
     with torch.no_grad():
         train_images = ts_maa_instance.train_x_img_all[mpd_idx];
         batch_size = ts_maa_instance.batch_size;
         encoded_features_list = []
-        for i in tqdm(range(0, len(train_images), batch_size), desc=f"{pretrainer_type.upper()}编码特征"):
+        for i in tqdm(range(0, len(train_images), batch_size),
+                      desc=f"{pretrainer_type.upper()}编码特征 (ws={target_window_size})"):
             batch_images = train_images[i:i + batch_size]
             if pretrainer_type == 't3vae':
-                mu, _ = encoder(batch_images); encoded_batch = mu
+                mu, _ = encoder(batch_images);
+                encoded_batch = mu
             else:
                 encoded_batch = encoder(batch_images).view(batch_images.size(0), -1)
             encoded_features_list.append(encoded_batch.cpu().numpy())
@@ -306,12 +344,15 @@ def visualize_encoded_feature_correlation(ts_maa_instance, pretrainer_ckpt_path,
     path_parts = ts_maa_instance.output_dir.replace('\\', '/').split('/');
     stock_name = path_parts[-1];
     sector_name = path_parts[-2]
-    plt.title(f'{pretrainer_type.upper()}编码后特征相关性热力图\n股票: {sector_name} - {stock_name}', fontsize=24,
-              pad=20)
+    plt.title(
+        f'{pretrainer_type.upper()}编码后特征相关性热力图 (ws={target_window_size})\n股票: {sector_name} - {stock_name}',
+        fontsize=24,
+        pad=20)
 
     vis_dir = os.path.join(ts_maa_instance.output_dir, "pretrain_vis", "feature_analysis")
     os.makedirs(vis_dir, exist_ok=True);
-    save_path = os.path.join(vis_dir, f'{pretrainer_type}_encoded_feature_correlation_heatmap.png')
+    save_path = os.path.join(vis_dir,
+                             f'{pretrainer_type}_encoded_feature_correlation_heatmap_ws{target_window_size}.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight');
     plt.close()
     print(f"已成功保存{pretrainer_type.upper()}编码后特征相关性热力图至: {save_path}")

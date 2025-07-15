@@ -75,7 +75,7 @@ STRATEGY_CONFIG = {
     "RSI_CHECK": False,  # (未实现) 仅当RSI指标未处于超买区时才允许买入
     "ADX_CHECK": False,  # 仅当ADX指标显示有趋势时才允许买入
     "PREDICTED_PRICE_INCREASE": False,  # (未实现) 仅当模型预测的下一个价格高于当前价格时才买入
-    "GAP_UP_FALL_BACK": False,  # (未实现) 当日大幅高开后回落时，即使有买入信号也禁止买入
+    "GAP_UP_FALL_BACK": True,  # (未实现) 当日大幅高开后回落时，即使有买入信号也禁止买入
 }
 
 # ==================== 策略参数配置 (数值) ====================

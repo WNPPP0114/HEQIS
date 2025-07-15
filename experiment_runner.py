@@ -44,7 +44,7 @@ COMMON_ARGS = {
     "window_sizes": [5, 10, 15],
     "N_pairs": 3,
     "num_classes": 3,
-    "generators": ["mpd", "mpd", "mpd"],
+    "generators": ["gru", "bilstm", "transformer"],
     "discriminators": None,
     "distill_epochs": 1,
     "cross_finetune_epochs": 5,
@@ -68,6 +68,9 @@ COMMON_ARGS = {
     "pretrain": True,  # 控制是否进行预训练
     "pretrain_epochs": 50,
     "lr_cae_finetune_multiplier": 100,
+
+    # 【新增】旋转位置编码开关
+    "use_rope": True, # 默认为False, 保持与之前行为一致。设为True则启用RoPE。
 }
 
 

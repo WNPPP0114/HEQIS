@@ -30,7 +30,7 @@ PREDICT_DATA_USER_END_DATE = '20250714'
 stock_info_dict = {
     #"指数": ["沪深300"],
     #"基金(场内)": ["沪深300ETF", "上证50ETF"],
-    "物联网": ["远望谷", "东信和平"],
+    #"物联网": ["远望谷", "东信和平"],
     "培育钻石": ["黄河旋风"],
     # "港口": ["凤凰航运"],
 }
@@ -152,11 +152,15 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
         indicators_dict['sma_20'] = talib.SMA(cl, 20);
         indicators_dict['sma_30'] = talib.SMA(cl, 30);
         indicators_dict['sma_60'] = talib.SMA(cl, 60);
+        indicators_dict['sma_120'] = talib.SMA(cl, 120);
+        indicators_dict['sma_240'] = talib.SMA(cl, 240);
         indicators_dict['ema_5'] = talib.EMA(cl, 5);
         indicators_dict['ema_10'] = talib.EMA(cl, 10);
         indicators_dict['ema_20'] = talib.EMA(cl, 20);
         indicators_dict['ema_30'] = talib.EMA(cl, 30);
         indicators_dict['ema_60'] = talib.EMA(cl, 60);
+        indicators_dict['ema_120'] = talib.EMA(cl, 120);
+        indicators_dict['ema_240'] = talib.EMA(cl, 240);
         macd, macdsignal, macdhist = talib.MACD(cl, 12, 26, 9);
         indicators_dict['macd_12_26_9'] = macd;
         indicators_dict['macds_12_26_9'] = macdsignal;
@@ -242,7 +246,7 @@ def robust_clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], format='%Y%m%d', errors='coerce').dt.strftime('%Y%m%d')
         df_cleaned.dropna(subset=['date'], inplace=True)
 
-    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'pre_close', 'pctChg', 'turn']
+    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'pctChg', 'turn']
     for col in numeric_cols:
         if col in df_cleaned.columns:
             df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
@@ -258,7 +262,6 @@ def preprocess_raw_df(df_raw_daily: pd.DataFrame, df_raw_basic: Optional[pd.Data
     df_daily = df_raw_daily.rename(columns={'vol': 'volume', 'trade_date': 'date', 'pct_chg': 'pctChg'})
     daily_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
     if 'pctChg' in df_daily.columns: daily_cols.append('pctChg')
-    if 'pre_close' in df_daily.columns: daily_cols.append('pre_close')
     df_daily = df_daily[[c for c in daily_cols if c in df_daily.columns]].copy()
 
     df_merged = df_daily
@@ -342,7 +345,7 @@ def fetch_and_process_stock_data(ts_code: str, security_type: str, category_name
                                        on='trade_date_dt', how='left').sort_values('trade_date_dt')
                 df_with_adj['adj_factor'].fillna(method='bfill', inplace=True);
                 df_with_adj['adj_factor'].fillna(method='ffill', inplace=True)
-                for col in ['open', 'high', 'low', 'close', 'pre_close']: df_with_adj[col] = pd.to_numeric(
+                for col in ['open', 'high', 'low', 'close']: df_with_adj[col] = pd.to_numeric(
                     df_with_adj[col], errors='coerce') * pd.to_numeric(df_with_adj['adj_factor'],
                                                                        errors='coerce') / base_adj
                 df_with_adj['pctChg'] = (df_with_adj['close'] / df_with_adj['close'].shift(1) - 1) * 100
