@@ -601,8 +601,8 @@ def load_initial_options(dropdown_id):
 
                 ohlcv_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
                 core_data_cols = ohlcv_cols + ['pctChg']
-                all_possible_ma_cols = [f'sma_{p}' for p in [5, 10, 15, 30, 60, 120, 240]]
-                all_possible_ema_cols = [f'ema_{p}' for p in [5, 10, 60, 120, 240]]
+                all_possible_ma_cols = [f'sma_{p}' for p in [5, 10, 20, 30, 60, 120, 240]]
+                all_possible_ema_cols = [f'ema_{p}' for p in [5, 10, 20, 30, 60, 120, 240]]
 
                 all_macd_cols_12_26_9 = ['macd_12_26_9', 'macds_12_26_9', 'macdh_12_26_9']
                 all_macd_cols_10_20_9 = ['macd_10_20_9', 'macds_10_20_9', 'macdh_10_20_9']
@@ -764,8 +764,8 @@ def plot_kline_callback(selected_full_stock_name_in_dir, generator_selection_str
 
     ohlcv_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
     core_data_cols = ohlcv_cols + ['pctChg']
-    all_possible_ma_cols = [f'sma_{p}' for p in [5, 10, 15, 30, 60, 120, 240]]
-    all_possible_ema_cols = [f'ema_{p}' for p in [5, 10, 60, 120, 240]]
+    all_possible_ma_cols = [f'sma_{p}' for p in [5, 10, 20, 30, 60, 120, 240]]
+    all_possible_ema_cols = [f'ema_{p}' for p in [5, 10, 20, 30, 60, 120, 240]]
 
     all_macd_cols_12_26_9 = ['macd_12_26_9', 'macds_12_26_9', 'macdh_12_26_9']
     all_macd_cols_10_20_9 = ['macd_10_20_9', 'macds_10_20_9', 'macdh_10_20_9']
@@ -985,7 +985,7 @@ def plot_kline_callback(selected_full_stock_name_in_dir, generator_selection_str
     ), row=1, col=1)
 
     ma_colors = ['#FFD700', '#FFA500', '#8A2BE2', '#00BFFF', '#ADFF2F', '#FF6347']
-    for i, period in enumerate([5, 10, 30, 60, 120, 240]):
+    for i, period in enumerate([5, 10, 20, 30, 60, 120, 240]):
         ma_col_name_in_df = f'sma_{period}'
         if ma_col_name_in_df in df_plot.columns and not df_plot[
             ma_col_name_in_df].isnull().all():

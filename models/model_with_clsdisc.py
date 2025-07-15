@@ -22,23 +22,37 @@ class PositionalEncoding(nn.Module):
 
 class Generator_mpd(nn.Module):
     def __init__(self, input_height, input_width, num_classes,
-                 cae_out_channels=[16, 32, 64], cae_kernel_size=3,
+                 pretrainer_type='cae',  # 新增参数，用于确定编码器类型
                  feature_size=512, num_layers=2, num_heads=16,
                  dropout=0.1, output_len=1):
         super().__init__()
-        self.cae_encoder = nn.Sequential()
-        in_channels = 1
-        for i, out_ch in enumerate(cae_out_channels):
-            self.cae_encoder.add_module(f"conv_{i + 1}",
-                                        nn.Conv2d(in_channels, out_ch, kernel_size=cae_kernel_size, padding='same'))
-            self.cae_encoder.add_module(f"relu_{i + 1}", nn.ReLU(True))
-            target_pool_size = (max(1, input_height // (2 ** (i + 1))), max(1, input_width // (2 ** (i + 1))))
-            self.cae_encoder.add_module(f"pool_{i + 1}", nn.AdaptiveMaxPool2d(target_pool_size))
-            in_channels = out_ch
+
+        # 根据类型动态创建和计算编码器
+        if pretrainer_type == 'cae':
+            from .pretrainer import CAE_Encoder
+            # 将编码器作为MPD生成器的一个子模块
+            self.pretrainer_encoder = CAE_Encoder(input_height, input_width)
+        elif pretrainer_type == 't3vae':
+            from .pretrainer import t3VAE_Encoder
+            # 将t3VAE编码器作为子模块
+            self.pretrainer_encoder = t3VAE_Encoder(input_height, input_width)
+        else:
+            raise ValueError(f"未知的预训练器类型: {pretrainer_type}")
+
+        # 动态计算展平后的维度
         with torch.no_grad():
             dummy_input = torch.randn(1, 1, input_height, input_width)
-            cae_output_shape = self.cae_encoder(dummy_input).shape
-            self.flattened_dim = cae_output_shape[1] * cae_output_shape[2] * cae_output_shape[3]
+            # 对于t3VAE编码器，我们只关心其卷积部分的输出或者最终特征的维度
+            if pretrainer_type == 't3vae':
+                # t3vae编码器返回 mu, logvar，我们用mu的维度
+                mu, _ = self.pretrainer_encoder(dummy_input)
+                pretrainer_output_dim = mu.shape[1]
+            else:  # CAE
+                pretrainer_output = self.pretrainer_encoder(dummy_input)
+                pretrainer_output_dim = pretrainer_output.view(pretrainer_output.size(0), -1).shape[1]
+
+        self.flattened_dim = pretrainer_output_dim
+
         self.to_transformer_input = nn.Linear(self.flattened_dim, feature_size)
         self.pos_encoder = PositionalEncoding(feature_size)
         encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=num_heads, dropout=dropout,
@@ -56,9 +70,16 @@ class Generator_mpd(nn.Module):
                     nn.init.constant_(m.bias, 0)
 
     def forward(self, src):
-        cae_features = self.cae_encoder(src)
-        flattened_features = cae_features.view(-1, self.flattened_dim)
-        transformer_input = self.to_transformer_input(flattened_features)
+        # 统一调用 pretrainer_encoder
+        if isinstance(self.pretrainer_encoder,
+                      nn.Module) and self.pretrainer_encoder.__class__.__name__ == 't3VAE_Encoder':
+            mu, _ = self.pretrainer_encoder(src)
+            encoded_features = mu  # 使用均值作为特征
+        else:
+            encoded_features_raw = self.pretrainer_encoder(src)
+            encoded_features = encoded_features_raw.view(-1, self.flattened_dim)
+
+        transformer_input = self.to_transformer_input(encoded_features)
         transformer_input = transformer_input.unsqueeze(1)
         transformer_input = self.pos_encoder(transformer_input)
         transformer_output = self.transformer_encoder(transformer_input)
@@ -168,23 +189,15 @@ class Generator_lstm(nn.Module):
         return gen, cls
 
 
-# ==============================================================================
-# === 新增模型: Generator_bigru (双向GRU) ===
-# ==============================================================================
 class Generator_bigru(nn.Module):
     def __init__(self, input_size, out_size, hidden_dim=512, num_layers=2):
         super().__init__()
         self.hidden_dim = hidden_dim
-        # 关键改动: bidirectional=True
         self.gru = nn.GRU(input_size, hidden_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
-
-        # 关键改动: 输入维度是 hidden_dim * 2，因为是双向的
         self.linear_1 = nn.Linear(hidden_dim * 2, hidden_dim)
         self.linear_2 = nn.Linear(hidden_dim, hidden_dim // 2)
         self.linear_3 = nn.Linear(hidden_dim // 2, out_size)
         self.dropout = nn.Dropout(0.2)
-
-        # 分类器的输入维度也是 hidden_dim * 2
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
@@ -194,48 +207,28 @@ class Generator_bigru(nn.Module):
 
     def forward(self, x):
         gru_out, _ = self.gru(x)
-        # 从双向GRU的输出中提取最后一个时间步的特征
-        # gru_out 形状: (batch, seq_len, num_directions * hidden_size)
-        # 我们需要前向的最后一个和后向的第一个时间步的隐藏状态
-        # 一个简单有效的方法是直接用最后一个时间步的拼接输出
         last_feature = self.dropout(gru_out[:, -1, :])
-
-        # 回归预测
         gen = self.linear_1(last_feature)
         gen = self.linear_2(gen)
         gen = self.linear_3(gen)
-
-        # 分类预测
         cls = self.classifier(last_feature)
-
         return gen, cls
 
 
-# ==============================================================================
-# === 新增模型: Generator_bilstm (双向LSTM) ===
-# ==============================================================================
 class Generator_bilstm(nn.Module):
     def __init__(self, input_size, out_size, hidden_size=512, num_layers=2, dropout=0.1):
         super().__init__()
-        # 关键改动: bidirectional=True
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
                             num_layers=num_layers, batch_first=True,
                             dropout=dropout, bidirectional=True)
-
-        # 关键改动: 输入维度是 hidden_size * 2
         self.linear = nn.Linear(hidden_size * 2, out_size)
         self.classifier = nn.Linear(hidden_size * 2, 3)
 
     def forward(self, x, hidden=None):
         lstm_out, hidden = self.lstm(x, hidden)
-
-        # 提取最后一个时间步的拼接输出
         last_out = lstm_out[:, -1, :]
-
-        # 回归和分类
         gen = self.linear(last_out)
         cls = self.classifier(last_out)
-
         return gen, cls
 
 

@@ -9,6 +9,11 @@ from utils.logger import setup_experiment_logging
 from time_series_maa import MAA_time_series
 import torch
 import sys
+from models.pretrainer import (
+    visualize_reconstruction,
+    visualize_feature_correlation,
+    visualize_encoded_feature_correlation
+)
 
 
 def find_stock_files(base_dir, stock_name=None, sector=None):
@@ -35,11 +40,8 @@ def run_experiment_for_stock(args, stock_csv_path):
     stock_name = path_parts[-2]
     sector_name = path_parts[-3]
 
-    # 统一的实验根目录，例如 output/multi_gan/板块/个股/
     experiment_base_dir = os.path.join(args.output_dir, sector_name, stock_name)
-    # 正式训练的模型保存在其下的 ckpt 子目录
     stock_specific_ckpt_dir = os.path.join(experiment_base_dir, 'ckpt')
-    # 其他输出（如日志、可视化图表）直接放在实验根目录
     stock_specific_output_dir = experiment_base_dir
 
     os.makedirs(stock_specific_output_dir, exist_ok=True)
@@ -53,8 +55,8 @@ def run_experiment_for_stock(args, stock_csv_path):
     local_args = argparse.Namespace(**vars(args))
     local_args.output_dir = stock_specific_output_dir
     local_args.ckpt_dir = stock_specific_ckpt_dir
+    local_args.train_csv_path = stock_csv_path
 
-    # 实例化 MAA_time_series
     gca = MAA_time_series(local_args,
                           local_args.N_pairs, local_args.batch_size, local_args.num_epochs,
                           local_args.generators, local_args.discriminators,
@@ -67,28 +69,21 @@ def run_experiment_for_stock(args, stock_csv_path):
                           device=local_args.device,
                           seed=local_args.random_seed)
 
-    # ==================== 新增: 个股CAE预训练触发逻辑 ====================
-    if 'mpd' in local_args.generators and local_args.pretrain_cae:
-        # CAE权重路径现在是相对于个股的输出目录
-        cae_ckpt_path_stock = os.path.join(stock_specific_output_dir, local_args.cae_ckpt_filename)
-        if os.path.exists(cae_ckpt_path_stock):
-            print(f"\n--- 已找到该股票的预训练CAE权重 '{cae_ckpt_path_stock}'，跳过预训练。 ---")
+    pretrainer_ckpt_path = None
+    if 'mpd' in local_args.generators and local_args.pretrain:
+        pretrainer_ckpt_path = os.path.join(stock_specific_output_dir, f"{local_args.pretrainer_type}_encoder.pt")
+        if os.path.exists(pretrainer_ckpt_path):
+            print(f"\n--- 已找到预训练权重 '{pretrainer_ckpt_path}'，跳过预训练。 ---")
         else:
-            print(f"\n--- 未找到该股票的预训练CAE权重，将仅使用当前股票数据进行预训练... ---")
-            # 调用预训练方法，只传入当前股票的CSV文件
-            gca.pretrain_cae_if_needed(
-                all_stock_files=[stock_csv_path],  # 只用自己的数据
-                cae_ckpt_path=cae_ckpt_path_stock,
-                pretrain_epochs=local_args.pretrain_cae_epochs
+            gca.run_pretraining_if_needed(
+                all_stock_files=[stock_csv_path],
+                pretrainer_ckpt_path=pretrainer_ckpt_path,
+                pretrain_epochs=local_args.pretrain_epochs
             )
-            print(f"--- {stock_name} 的CAE预训练完成。权重已保存至 '{cae_ckpt_path_stock}'。 ---")
-        # 将动态生成的、个股专属的CAE权重路径更新到参数中，以便后续加载
-        local_args.cae_ckpt_path = cae_ckpt_path_stock
-    # ========================== 预训练逻辑结束 ==========================
+            print(
+                f"--- {stock_name} 的 {local_args.pretrainer_type.upper()} 预训练完成。权重已保存至 '{pretrainer_ckpt_path}'。 ---")
+        local_args.pretrainer_ckpt_path = pretrainer_ckpt_path
 
-    # --- 后续流程使用更新后的 local_args ---
-
-    # 加载和处理数据
     full_df_path = stock_csv_path
     full_df = pd.read_csv(full_df_path, usecols=['date'])
     date_series = pd.to_datetime(full_df['date'], format='%Y%m%d')
@@ -99,9 +94,13 @@ def run_experiment_for_stock(args, stock_csv_path):
         target_column='close',
         exclude_columns=['date', 'direction']
     )
-
-    # 初始化数据加载器和模型（init_model会在这里加载预训练权重）
     gca.init_dataloader()
+
+    visualize_feature_correlation(gca)
+    if pretrainer_ckpt_path and os.path.exists(pretrainer_ckpt_path):
+        visualize_reconstruction(gca, pretrainer_ckpt_path, local_args.pretrainer_type)
+        visualize_encoded_feature_correlation(gca, pretrainer_ckpt_path, local_args.pretrainer_type)
+
     gca.init_model(local_args.num_classes)
 
     logger = setup_experiment_logging(stock_specific_output_dir, vars(local_args), f"train_{stock_name}")
@@ -109,14 +108,11 @@ def run_experiment_for_stock(args, stock_csv_path):
     results = None
     if local_args.mode == "train":
         results, best_model_state = gca.train(logger, date_series=date_series)
-
         if best_model_state and any(s is not None for s in best_model_state):
             print("\n--- 训练结束，保存相关产物 ---")
-
             gca.save_models(best_model_state)
             gca.save_scalers()
             gca.generate_and_save_daily_signals(best_model_state, predict_csv_path)
-
             print("\n--- 加载最佳模型以生成预测对比CSV ---")
             for i in range(gca.N):
                 if i < len(best_model_state) and best_model_state[i] is not None:
@@ -126,26 +122,17 @@ def run_experiment_for_stock(args, stock_csv_path):
                         except Exception as e:
                             print(f"警告: 加载生成器 G{i + 1} 状态用于 CSV 生成失败: {e}")
                     else:
-                        print(f"警告: G{i + 1} 生成器未被初始化，无法加载状态用于 CSV 生成。")
-
+                        print(f"警告: G{i + 1} 生成器未被初始化。")
             gca.save_predictions_to_csv(date_series=date_series)
-
     elif local_args.mode == "pred":
         results = gca.pred(date_series=date_series)
 
     if results:
-        # 注意：这里的主结果文件还是保存在全局output_dir下，便于统一查看
         master_results_file = os.path.join(args.output_dir, "master_results.csv")
         timestamp_for_log = time.strftime("%Y%m%d-%H%M%S")
-        result_row = {
-            "timestamp": timestamp_for_log,
-            "sector": sector_name,
-            "stock": stock_name,
-            "train_mse": results["train_mse"],
-            "train_mae": results["train_mae"],
-            "test_mse": results["test_mse"],
-            "test_mae": results["test_mae"],
-        }
+        result_row = {"timestamp": timestamp_for_log, "sector": sector_name, "stock": stock_name,
+                      "train_mse": results["train_mse"], "train_mae": results["train_mae"],
+                      "test_mse": results["test_mse"], "test_mae": results["test_mae"]}
         df = pd.DataFrame([result_row])
         header = not os.path.exists(master_results_file)
         df.to_csv(master_results_file, mode='a', header=header, index=False)

@@ -33,7 +33,7 @@ class MAABase(ABC):
         self.device = device
         self.precise = precise
 
-        self.set_seed(self.seed)
+        # self.set_seed(self.seed) # <--- 此处调用已被注释掉
         self.device = setup_device(device)
         print("运行设备:", self.device)
 

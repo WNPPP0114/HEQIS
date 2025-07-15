@@ -24,15 +24,15 @@ USE_ADJUSTED_DATA = True
 INDICATOR_WARMUP_PERIOD = 240
 TRAIN_DATA_FETCH_START_DATE = '20120101'
 USER_TRAIN_END_DATE = '20250630'
-PREDICT_DATA_USER_END_DATE = 'latest'
+PREDICT_DATA_USER_END_DATE = '20250714'
 
 # --- 核心修改点1: stock_info_dict 中使用带后缀的全名 ---
 stock_info_dict = {
-    #"指数": ["沪深300", "上证50"],
-    #"基金(场内)": ["沪深300ETF", "上证50ETF", "券商ETF"],
+    #"指数": ["沪深300"],
+    #"基金(场内)": ["沪深300ETF", "上证50ETF"],
     "物联网": ["远望谷", "东信和平"],
     "培育钻石": ["黄河旋风"],
-    "港口": ["凤凰航运"],
+    # "港口": ["凤凰航运"],
 }
 
 # --- Tushare API 初始化 (保持不变) ---

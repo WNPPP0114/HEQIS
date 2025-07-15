@@ -1,4 +1,4 @@
-# 文件名: experiment_runner.py (已修改以确保批量运行的可复现性)
+# 文件名: experiment_runner.py
 
 import argparse
 import torch
@@ -7,7 +7,6 @@ import sys
 import time
 import pandas as pd
 import logging
-# 导入功能模块
 import run_multi_gan
 import random
 import numpy as np
@@ -26,8 +25,7 @@ def set_seed(seed):
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)  # 适用于多GPU环境
-            # 这两行是确保CUDA运算可复现性的关键
+            torch.cuda.manual_seed_all(seed)
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
         print(f"--- 随机种子已设置为: {seed} ---")
@@ -41,12 +39,12 @@ COMMON_ARGS = {
     "sector": None,
     "data_base_dir": "csv_data",
     "output_dir": "output/multi_gan",
-    "ckpt_dir": "ckpt/multi_gan",  # 注意：这个现在只作为全局的根目录，具体路径在run_multi_gan中拼接
+    "ckpt_dir": "ckpt/multi_gan",
     "notes": "Default run from COMMON_ARGS",
     "window_sizes": [5, 10, 15],
     "N_pairs": 3,
     "num_classes": 3,
-    "generators": ["gru", "bilstm", "transformer"],
+    "generators": ["mpd", "mpd", "mpd"],
     "discriminators": None,
     "distill_epochs": 1,
     "cross_finetune_epochs": 5,
@@ -61,16 +59,15 @@ COMMON_ARGS = {
     "ckpt_path": "auto",
 
     # 损失函数配置
-    "adversarial_loss_mode": "bce",
-    "regression_loss_mode": "mse",
-    "monitor_metric": "val_mse",
+    "adversarial_loss_mode": "bce",  # 可选 'bce', 'mse'
+    "regression_loss_mode": "mse",  # 可选 'mse', 'mae'
+    "monitor_metric": "val_mse",  # 可选 'val_mse', 'val_acc', 'val_bce', 'val_cls_loss'
 
-    # CAE预训练相关参数
-    "pretrain_cae": True,
-    "pretrain_cae_epochs": 50,
-    # CAE权重现在是相对于每个股票的输出目录，所以这里只保留文件名
-    "cae_ckpt_filename": "cae_encoder_pretrained.pt",
-    "lr_cae_finetune_multiplier": 0.5,
+    # 预训练相关参数
+    "pretrainer_type": "t3vae",  # 可选: 'cae', 't3vae'
+    "pretrain": True,  # 控制是否进行预训练
+    "pretrain_epochs": 50,
+    "lr_cae_finetune_multiplier": 100,
 }
 
 
@@ -100,7 +97,6 @@ def setup_arg_parser():
 
 
 def validate_args(args):
-    # ... (此函数保持不变)
     if len(args.generators) != args.N_pairs or len(args.window_sizes) != args.N_pairs:
         print("错误: --generators, --window_sizes, 和 --N_pairs 的数量必须一致!")
         sys.exit(1)
@@ -131,19 +127,18 @@ def validate_args(args):
     if args.monitor_metric not in ['val_mse', 'val_acc', 'val_bce', 'val_cls_loss']:
         print(f"警告: 无效的监控指标。可选值: 'val_mse', 'val_acc', 'val_bce', 'val_cls_loss'")
 
+    if args.pretrainer_type not in ['cae', 't3vae']:
+        print(f"警告: 无效的预训练器类型 '{args.pretrainer_type}'。将使用默认的 'cae'。")
+        args.pretrainer_type = 'cae'
+
     return args
 
 
 # ==============================================================================
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)s  %(message)s",
-        handlers=[
-            logging.StreamHandler()
-        ]
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s",
+                        handlers=[logging.StreamHandler()])
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
@@ -151,7 +146,6 @@ def main():
     args = parser.parse_args()
     args = validate_args(args)
 
-    # 在所有操作开始前，先全局设置一次随机种子
     set_seed(args.random_seed)
 
     print("===== 当前最终运行参数 (已合并默认值和命令行参数) =====")
@@ -161,24 +155,17 @@ def main():
 
     stock_files_to_process = run_multi_gan.find_stock_files(args.data_base_dir, args.stock_name, args.sector)
     if not stock_files_to_process:
-        print(f"错误: 在 '{args.data_base_dir}' 目录中找不到任何匹配的股票数据。请确认 get_stock_data.py 已成功运行。")
+        print(f"错误: 在 '{args.data_base_dir}' 目录中找不到任何匹配的股票数据。")
         sys.exit(1)
 
     print(f"\n成功找到 {len(stock_files_to_process)} 个股票数据文件待处理。")
 
-    # 预训练逻辑已从此文件移除，交由 run_multi_gan.py 处理
-
     for stock_file in stock_files_to_process:
-
-        # ==================== 核心修改点 ====================
-        # 在处理每只新股票之前，都重置一次随机种子，以确保实验之间的独立性和可复现性。
         set_seed(args.random_seed)
-        # ====================================================
 
         path_parts = stock_file.replace('\\', '/').split('/')
         stock_name_from_path = path_parts[-2]
         sector_name_from_path = path_parts[-3]
-
         expected_output_dir = os.path.join(args.output_dir, sector_name_from_path, stock_name_from_path)
 
         if args.mode == "train" and os.path.isdir(expected_output_dir):
@@ -191,9 +178,7 @@ def main():
                     f"\n--- 找到股票 {stock_name_from_path} 的目录 {expected_output_dir}，但未找到检查点，将尝试重新运行。 ---")
 
         try:
-            # 直接将所有参数传递给单次实验执行器
             run_multi_gan.run_experiment_for_stock(args, stock_file)
-
         except Exception as e:
             stock_name_from_path_in_err = stock_file.replace('\\', '/').split('/')[-2]
             print(f"\n!!!!!! 在处理股票 {stock_name_from_path_in_err} 时发生严重错误: {e} !!!!!!")

@@ -1,4 +1,4 @@
-# 文件名: filter_trading_signals.py
+# 文件名: filter_trading_signals.py (已修改)
 
 import pandas as pd
 import os
@@ -68,6 +68,7 @@ STRATEGY_CONFIG = {
     # 买入过滤策略
     "DAILY_DROP_LIMIT": True,  # 当日跌停（或接近跌停）时，即使有买入信号也禁止买入
     "ONE_WORD_BOARD_NO_BUY": True,  # 当日一字板涨停时，即使有买入信号也禁止买入
+    "ONE_WORD_BOARD_SPIKE_NO_BUY": True, # 昨日一字板涨停，今日爆量，则禁止买入
     "LOSS_BAN": False,  # 在一笔亏损交易后，禁止在N天内再次买入
     "DAILY_GAIN_LIMIT": False,  # 当日涨幅过高（如超过6%）时，即使有买入信号也禁止买入
     "MA_TREND": False,  # 仅当短期均线在长期均线之上（多头趋势）时才允许买入
@@ -93,9 +94,9 @@ STRATEGY_PARAMS = {
 
     # “一字板”策略相关参数
     "ONE_WORD_BOARD_PCT_CHG_THRESHOLD": 9.6,  # 定义“一字板”的涨幅阈值
-    "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,  # “一字板”次日成交量需要是前一日的多少倍才触发卖出
+    "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,  # “一字板”次日成交量需要是前一日的多少倍才触发卖出/禁止买入
     "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE": 0.01,  # 定义“一字板”时，开盘价与收盘价差异的容忍度 (1%)
-    "ONE_WORD_BOARD_SELL_BAN_DAYS": 10,  # 在执行“一字板”卖出策略后，禁止买入该股票的天数
+    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 30,  # 在执行“一字板爆量”卖出或禁止买入后，禁止买入该股票的交易日数
 
     # 买入条件参数
     "LOSS_BAN_DAYS": 3,  # 亏损交易后，禁止买入的天数
@@ -111,11 +112,10 @@ STRATEGY_PARAMS = {
     "RSI_OVERSOLD_THRESHOLD": 80,  # RSI超买区的阈值
     "ADX_BUY_THRESHOLD": 20,  # ADX趋势强度阈值
 }
-
-
 # ==============================================================================
 # --- 辅助函数 ---
 # ==============================================================================
+# ... plot_trade_analysis 和 generate_initial_signals 函数保持不变 ...
 def plot_trade_analysis(trades_df, daily_equity_curve, stock_info, output_dir):
     stock_name = stock_info['stock_name']
     generator_index = stock_info['generator_index']
@@ -207,10 +207,9 @@ def run_backtest_for_strategy(task_info):
         required_cols_raw = ['date', 'open', 'high', 'low', 'close', 'volume', 'pctChg']
 
         if STRATEGY_CONFIG.get("MA_TREND", False):
-             required_cols_raw.extend([f'sma_{short_ma_period}', f'sma_{long_ma_period}'])
+            required_cols_raw.extend([f'sma_{short_ma_period}', f'sma_{long_ma_period}'])
         if STRATEGY_CONFIG.get("ADX_CHECK", False):
-             required_cols_raw.append(f'adx_{adx_period}')
-
+            required_cols_raw.append(f'adx_{adx_period}')
 
         required_cols_raw = list(set(required_cols_raw))
 
@@ -253,23 +252,28 @@ def run_backtest_for_strategy(task_info):
             is_not_last_day = current_loc + 1 < len(trading_dates)
             next_trade_date = trading_dates[current_loc + 1] if is_not_last_day else pd.NaT
 
+            # --- 公共条件判断: “一字板+爆量” ---
+            is_dm1_one_word_board_spike = False
+            if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"] or STRATEGY_CONFIG.get("ONE_WORD_BOARD_SPIKE_NO_BUY", False):
+                open_d_m1, close_d_m1, pct_d_m1, vol_d_m1 = row_T.get('open_prev1'), row_T.get(
+                    'close_prev1'), row_T.get('pctChg_prev1'), row_T.get('volume_prev1')
+                if all(pd.notna(x) for x in [open_d_m1, close_d_m1, pct_d_m1, vol_d_m1, row_T['volume']]):
+                    is_dm1_one_word_board = (
+                            pct_d_m1 >= STRATEGY_PARAMS["ONE_WORD_BOARD_PCT_CHG_THRESHOLD"] and
+                            abs(open_d_m1 - close_d_m1) / open_d_m1 < STRATEGY_PARAMS[
+                                "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE"]
+                    )
+                    is_vol_spike = (
+                            vol_d_m1 > 0 and
+                            row_T['volume'] >= vol_d_m1 * STRATEGY_PARAMS["ONE_WORD_BOARD_VOLUME_MULTIPLIER"]
+                    )
+                    if is_dm1_one_word_board and is_vol_spike:
+                        is_dm1_one_word_board_spike = True
+            # --- 结束公共条件判断 ---
 
             if current_position == 'long':
-                if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"]:
-                    open_d_m1 = row_T.get('open_prev1');
-                    close_d_m1 = row_T.get('close_prev1');
-                    pct_d_m1 = row_T.get('pctChg_prev1');
-                    vol_d_m1 = row_T.get('volume_prev1')
-                    if all(pd.notna(x) for x in [open_d_m1, close_d_m1, pct_d_m1, vol_d_m1, row_T['volume']]):
-                        is_dm1_one_word_board = (
-                                pct_d_m1 >= STRATEGY_PARAMS["ONE_WORD_BOARD_PCT_CHG_THRESHOLD"] and abs(
-                            open_d_m1 - close_d_m1) / open_d_m1 < STRATEGY_PARAMS[
-                                    "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE"])
-                        is_vol_spike = (vol_d_m1 > 0 and row_T['volume'] >= vol_d_m1 * STRATEGY_PARAMS[
-                            "ONE_WORD_BOARD_VOLUME_MULTIPLIER"])
-                        if is_dm1_one_word_board and is_vol_spike:
-                            action_to_take = 'Sell_One_Word'
-
+                if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"] and is_dm1_one_word_board_spike:
+                    action_to_take = 'Sell_One_Word'
 
                 if action_to_take is None:
                     is_hold_filtered = False
@@ -283,13 +287,15 @@ def run_backtest_for_strategy(task_info):
             elif current_position is None:
                 can_buy = (pred_for_Tplus1 == 2)
 
-                if can_buy and pd.notna(next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_buy = False
-                if can_buy and STRATEGY_CONFIG["DAILY_DROP_LIMIT"] and row_T['pctChg'] <= STRATEGY_PARAMS["DAILY_DROP_LIMIT"]: can_buy = False
+                if can_buy and pd.notna(
+                    next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_buy = False
+                if can_buy and STRATEGY_CONFIG["DAILY_DROP_LIMIT"] and row_T['pctChg'] <= STRATEGY_PARAMS[
+                    "DAILY_DROP_LIMIT"]: can_buy = False
 
                 if can_buy and STRATEGY_CONFIG.get("ONE_WORD_BOARD_NO_BUY", False):
                     is_today_one_word_board = False
                     if row_T['open'] > 0 and row_T['close'] > 0 and row_T['volume'] > 0:
-                         is_today_one_word_board = (
+                        is_today_one_word_board = (
                                 row_T['pctChg'] >= STRATEGY_PARAMS["ONE_WORD_BOARD_PCT_CHG_THRESHOLD"] and
                                 abs(row_T['open'] - row_T['close']) / row_T['open'] < STRATEGY_PARAMS[
                                     "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE"]
@@ -297,8 +303,17 @@ def run_backtest_for_strategy(task_info):
                     if is_today_one_word_board:
                         can_buy = False
 
-                if can_buy and STRATEGY_CONFIG.get("LOSS_BAN", False) and pd.notna(next_trade_date) and next_trade_date < loss_ban_end_date:
-                     can_buy = False
+                # 【修改】当一字板爆量时，不仅禁止买入，还要触发交易禁令
+                if can_buy and STRATEGY_CONFIG.get("ONE_WORD_BOARD_SPIKE_NO_BUY",
+                                                   False) and is_dm1_one_word_board_spike:
+                    can_buy = False
+                    if pd.notna(next_trade_date):
+                        ban_days = STRATEGY_PARAMS.get("ONE_WORD_BOARD_SPIKE_BAN_DAYS", 10)
+                        one_word_board_ban_end_date = next_trade_date + timedelta(days=ban_days)
+
+                if can_buy and STRATEGY_CONFIG.get("LOSS_BAN", False) and pd.notna(
+                        next_trade_date) and next_trade_date < loss_ban_end_date:
+                    can_buy = False
 
                 if can_buy and STRATEGY_CONFIG.get("MA_TREND", False):
                     short_ma_col = f'sma_{short_ma_period}'
@@ -309,17 +324,16 @@ def run_backtest_for_strategy(task_info):
                         if pd.isna(short_ma_val) or pd.isna(long_ma_val) or short_ma_val <= long_ma_val:
                             can_buy = False
                     else:
-                         can_buy = False
+                        can_buy = False
 
                 if can_buy and STRATEGY_CONFIG.get("ADX_CHECK", False):
                     adx_col = f'adx_{adx_period}'
                     if adx_col in row_T:
-                         adx_val = row_T[adx_col]
-                         if pd.isna(adx_val) or adx_val < STRATEGY_PARAMS["ADX_BUY_THRESHOLD"]:
-                             can_buy = False
+                        adx_val = row_T[adx_col]
+                        if pd.isna(adx_val) or adx_val < STRATEGY_PARAMS["ADX_BUY_THRESHOLD"]:
+                            can_buy = False
                     else:
-                         can_buy = False
-
+                        can_buy = False
 
                 if can_buy:
                     action_to_take = "Buy"
@@ -341,10 +355,14 @@ def run_backtest_for_strategy(task_info):
                         trade_return = (net_proceeds - total_buy_cost) / total_buy_cost if total_buy_cost > 0 else 0.0
                         trades_log.append({'exit_date': next_trade_date, 'return': trade_return})
                         current_position = None
+
+                        # 【修改】使用新的通用参数来设置交易禁令
                         if action_to_take == "Sell_One_Word":
-                            one_word_board_ban_end_date = next_trade_date + timedelta(days=STRATEGY_PARAMS["ONE_WORD_BOARD_SELL_BAN_DAYS"])
+                            ban_days = STRATEGY_PARAMS.get("ONE_WORD_BOARD_SPIKE_BAN_DAYS", 10)
+                            one_word_board_ban_end_date = next_trade_date + timedelta(days=ban_days)
+
                         if STRATEGY_CONFIG.get("LOSS_BAN", False) and trade_return < 0:
-                             loss_ban_end_date = next_trade_date + timedelta(days=STRATEGY_PARAMS["LOSS_BAN_DAYS"])
+                            loss_ban_end_date = next_trade_date + timedelta(days=STRATEGY_PARAMS["LOSS_BAN_DAYS"])
 
                         daily_equity *= (1 + trade_return)
                         equity_curve_points.append((next_trade_date, daily_equity))
@@ -353,19 +371,21 @@ def run_backtest_for_strategy(task_info):
                 elif action_to_take == "Buy":
                     buy_price = row_T['open_T+1']
                     if pd.notna(buy_price) and buy_price > 0 and current_position is None:
-                         can_execute_buy = True
-                         if pd.notna(next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_execute_buy = False
-                         if pd.notna(next_trade_date) and next_trade_date < loss_ban_end_date: can_execute_buy = False
+                        can_execute_buy = True
+                        if pd.notna(
+                            next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_execute_buy = False
+                        if pd.notna(next_trade_date) and next_trade_date < loss_ban_end_date: can_execute_buy = False
 
-                         if can_execute_buy and (daily_equity * INITIAL_CAPITAL) > (buy_price * 100 + max(buy_price * 100 * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)):
-                              shares_to_buy = math.floor((daily_equity * INITIAL_CAPITAL) / buy_price / 100) * 100
-                              if shares_to_buy > 0:
-                                  buy_value = shares_to_buy * buy_price;
-                                  buy_fee = max(buy_value * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)
-                                  current_position = 'long'
-                                  total_buy_cost, shares_bought = buy_value + buy_fee, shares_to_buy
+                        if can_execute_buy and (daily_equity * INITIAL_CAPITAL) > (
+                                buy_price * 100 + max(buy_price * 100 * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)):
+                            shares_to_buy = math.floor((daily_equity * INITIAL_CAPITAL) / buy_price / 100) * 100
+                            if shares_to_buy > 0:
+                                buy_value = shares_to_buy * buy_price;
+                                buy_fee = max(buy_value * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)
+                                current_position = 'long'
+                                total_buy_cost, shares_bought = buy_value + buy_fee, shares_to_buy
 
-
+        # ... (后续的指标计算和文件保存逻辑保持不变) ...
         if not equity_curve_points:
             daily_equity_curve = pd.Series(1.0, index=df_merged.index)
         else:
@@ -379,26 +399,28 @@ def run_backtest_for_strategy(task_info):
         num_trades = len(df_trades)
         if num_trades == 0:
             metrics = {'num_trades': 0, 'cumulative_return_percentage': 0.0, 'avg_return_per_trade_percentage': 0.0,
-                       'win_rate_percentage': 0.0, 'profit_loss_ratio': np.nan, 'max_single_trade_drawdown_percentage': 0.0}
+                       'win_rate_percentage': 0.0, 'profit_loss_ratio': np.nan,
+                       'max_single_trade_drawdown_percentage': 0.0}
         else:
             win_rate = (df_trades['return'] > 0).sum() / num_trades * 100
             avg_return = df_trades['return'].mean() * 100
             total_profit = df_trades[df_trades['return'] > 0]['return'].sum()
             total_loss = abs(df_trades[df_trades['return'] < 0]['return'].sum())
             profit_loss_ratio = total_profit / total_loss if total_loss > 0 else np.inf
-            cumulative_return = (daily_equity_curve.iloc[-1] - daily_equity_curve.iloc[0]) if not daily_equity_curve.empty else 0.0
-            cumulative_return_pct = cumulative_return / daily_equity_curve.iloc[0] * 100 if not daily_equity_curve.empty and daily_equity_curve.iloc[0] != 0 else 0.0
+            cumulative_return = (daily_equity_curve.iloc[-1] - daily_equity_curve.iloc[
+                0]) if not daily_equity_curve.empty else 0.0
+            cumulative_return_pct = cumulative_return / daily_equity_curve.iloc[
+                0] * 100 if not daily_equity_curve.empty and daily_equity_curve.iloc[0] != 0 else 0.0
 
             losing_returns = df_trades[df_trades['return'] < 0]['return']
-            # Calculate max single trade drawdown as a negative percentage
             max_single_trade_drawdown_pct = 0.0
             if not losing_returns.empty:
-                 max_single_trade_drawdown_pct = losing_returns.min() * 100 # min() gives the largest negative return
+                max_single_trade_drawdown_pct = losing_returns.min() * 100
 
             metrics = {'num_trades': num_trades, 'cumulative_return_percentage': cumulative_return_pct,
                        'avg_return_per_trade_percentage': avg_return, 'win_rate_percentage': win_rate,
-                       'profit_loss_ratio': profit_loss_ratio, 'max_single_trade_drawdown_percentage': max_single_trade_drawdown_pct}
-
+                       'profit_loss_ratio': profit_loss_ratio,
+                       'max_single_trade_drawdown_percentage': max_single_trade_drawdown_pct}
 
         output_dir = os.path.join(FILTERED_OUTPUT_BASE_DIR, sector_name, stock_name)
         os.makedirs(output_dir, exist_ok=True)
@@ -433,6 +455,7 @@ def run_backtest_for_strategy(task_info):
 # --- 主执行 ---
 # ==============================================================================
 if __name__ == '__main__':
+    # ... (主执行部分保持不变) ...
     multiprocessing.freeze_support()
     print(FONT_SETUP_MESSAGE)
 
@@ -490,7 +513,6 @@ if __name__ == '__main__':
                 cum_ret = metric.get('cumulative_return_percentage', 0) / 100.0;
                 win_rate = metric.get('win_rate_percentage', 0) / 100.0
                 pl_ratio = metric.get('profit_loss_ratio', 0.0)
-                # Get the magnitude of the max single trade drawdown for the penalty
                 max_dd_magnitude = abs(metric.get('max_single_trade_drawdown_percentage', 0.0)) / 100.0
 
                 if cum_ret < 0: return -float('inf')
@@ -511,9 +533,15 @@ if __name__ == '__main__':
             else:
                 best_metric_fallback = None
                 if stock_metrics:
-                     best_metric_fallback = max(stock_metrics, key=lambda x: (x.get('num_trades', 0), x.get('cumulative_return_percentage', -float('inf'))))
-                best_metric = best_metric_fallback if best_metric_fallback else {'generator_index': 'N/A', 'mode': 'N/A', 'num_trades': 0, 'cumulative_return_percentage': 0.0, 'avg_return_per_trade_percentage': 0.0, 'win_rate_percentage': 0.0, 'profit_loss_ratio': np.nan, 'max_single_trade_drawdown_percentage': 0.0}
-
+                    best_metric_fallback = max(stock_metrics, key=lambda x: (
+                    x.get('num_trades', 0), x.get('cumulative_return_percentage', -float('inf'))))
+                best_metric = best_metric_fallback if best_metric_fallback else {'generator_index': 'N/A',
+                                                                                 'mode': 'N/A', 'num_trades': 0,
+                                                                                 'cumulative_return_percentage': 0.0,
+                                                                                 'avg_return_per_trade_percentage': 0.0,
+                                                                                 'win_rate_percentage': 0.0,
+                                                                                 'profit_loss_ratio': np.nan,
+                                                                                 'max_single_trade_drawdown_percentage': 0.0}
 
             print(
                 f"  -> 最佳策略: G{best_metric['generator_index']} (模式 {best_metric['mode']}) | 交易: {best_metric['num_trades']} | 收益: {best_metric['cumulative_return_percentage']:.2f}% | 均笔收益: {best_metric.get('avg_return_per_trade_percentage', 0):.2f}% | 胜率: {best_metric['win_rate_percentage']:.2f}% | 盈亏比: {best_metric.get('profit_loss_ratio', 0):.2f} | 最大单笔回撤: {best_metric.get('max_single_trade_drawdown_percentage', 0):.2f}%"

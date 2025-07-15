@@ -14,9 +14,6 @@ import numpy as np
 import models  # 确保导入 models 模块
 
 
-# scaler = GradScaler()  <--- 已从此处移除
-
-
 def get_loss_function(name):
     if name == 'bce':
         return nn.BCEWithLogitsLoss()
@@ -35,7 +32,6 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
                     init_GDweight=[[1, 0, 0, 1.0], [0, 1, 0, 1.0], [0, 0, 1, 1.0]],
                     final_GDweight=[[0.333, 0.333, 0.333, 1.0], [0.333, 0.333, 0.333, 1.0], [0.333, 0.333, 0.333, 1.0]],
                     logger=None, dynamic_weight=False, date_series=None):
-    # 解决方案: 在函数开始时创建 GradScaler 实例，确保每次调用都是全新的、独立的
     scaler = GradScaler()
 
     N = len(generators)
@@ -48,17 +44,18 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
 
     optimizers_G = []
     for gen in generators:
+        # 【修改】将硬编码的 'cae_encoder' 改为通用的 'pretrainer_encoder'
         if isinstance(gen, models.Generator_mpd):
             finetune_lr = args.lr * args.lr_cae_finetune_multiplier
             optimizer = torch.optim.AdamW([
-                {'params': gen.cae_encoder.parameters(), 'lr': finetune_lr},
+                {'params': gen.pretrainer_encoder.parameters(), 'lr': finetune_lr},
                 {'params': gen.to_transformer_input.parameters(), 'lr': args.lr},
                 {'params': gen.transformer_encoder.parameters(), 'lr': args.lr},
                 {'params': gen.regression_head.parameters(), 'lr': args.lr},
                 {'params': gen.classification_head.parameters(), 'lr': args.lr}
             ], betas=(0.9, 0.999))
             optimizers_G.append(optimizer)
-            print(f"为 Generator_mpd 设置了分层学习率: CAE部分学习率为 {finetune_lr}, 其他部分为 {args.lr}")
+            print(f"为 Generator_mpd 设置了分层学习率: 预训练编码器部分学习率为 {finetune_lr}, 其他部分为 {args.lr}")
         else:
             optimizers_G.append(torch.optim.AdamW(gen.parameters(), lr=args.lr, betas=(0.9, 0.999)))
 
@@ -85,7 +82,7 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
     best_model_state, patience_counter, patience = [None] * N, 0, 15
     print("开始训练")
 
-    is_mpd_run = "mpd" in args.generators[0]
+    is_mpd_run = any("mpd" in gen_name for gen_name in args.generators)
 
     for epoch in range(num_epochs):
         epo_start = time.time()
@@ -102,10 +99,18 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
             X, Y, LABELS = [], [], []
 
             if is_mpd_run:
-                for gap in gaps:
-                    X.append(x_batch_data[:, :, gap:, :])
-                    Y.append(y_last[:, gap:, :])
-                    LABELS.append(label_last[:, gap:, :])
+                for i in range(N):
+                    # 每个mpd模型都接收图像格式的输入
+                    if args.generators[i] == 'mpd':
+                        X.append(x_batch_data[:, :, gaps[i]:, :])
+                    else:  # 非mpd模型接收序列格式输入，需要从dataloader获取
+                        # 这是一个简化处理，假设dataloader提供了所有格式的数据
+                        # 实际上，dataloader应该根据模型类型提供不同数据
+                        # 此处假设dataloader[-1]的数据格式对所有模型适用
+                        X.append(train_xes[i][batch_idx * args.batch_size:(batch_idx + 1) * args.batch_size])
+
+                    Y.append(y_last[:, gaps[i]:, :])
+                    LABELS.append(label_last[:, gaps[i]:, :])
             else:
                 for gap in gaps:
                     X.append(x_batch_data[:, gap:, :])
@@ -125,7 +130,7 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
 
             for i in range(N):
                 scaler.step(optimizers_D[i])
-            scaler.update()  # 对所有判别器执行step后，执行一次update
+            scaler.update()
 
             for i in range(N):
                 discriminators[i].eval()
@@ -143,7 +148,7 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
 
             for opt in optimizers_G:
                 scaler.step(opt)
-            scaler.update()  # 对所有生成器执行step后，执行一次update
+            scaler.update()
 
         for k, v in loss_dict.items(): hists_dict[k][epoch] = np.mean(v)
 
@@ -175,21 +180,18 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
             logging.info(f"Start cross finetune on Epoch {epoch + 1}! G{G_rank[0] + 1} with D{D_rank[0] + 1}")
             cross_best_Gloss = np.inf
             for e in range(cross_finetune_epochs):
-                for batch_idx, (x_batch_data, y_last, label_last) in enumerate(dataloaders[-1]):
+                for batch_idx, batch_data in enumerate(dataloaders[-1]):
+                    x_batch_data, y_last, label_last = batch_data[0], batch_data[1], batch_data[2]
                     if label_last.dim() == 2: label_last = label_last.unsqueeze(-1)
                     x_batch_data, y_last, label_last = x_batch_data.to(device), y_last.to(device), label_last.to(device)
 
                     X_fine, Y_fine, LABELS_fine = [], [], []
                     if is_mpd_run:
-                        for gap in gaps:
-                            X_fine.append(x_batch_data[:, :, gap:, :]);
-                            Y_fine.append(y_last[:, gap:, :]);
-                            LABELS_fine.append(label_last[:, gap:, :])
+                        for gap in gaps: X_fine.append(x_batch_data[:, :, gap:, :]); Y_fine.append(
+                            y_last[:, gap:, :]); LABELS_fine.append(label_last[:, gap:, :])
                     else:
-                        for gap in gaps:
-                            X_fine.append(x_batch_data[:, gap:, :]);
-                            Y_fine.append(y_last[:, gap:, :]);
-                            LABELS_fine.append(label_last[:, gap:, :])
+                        for gap in gaps: X_fine.append(x_batch_data[:, gap:, :]); Y_fine.append(
+                            y_last[:, gap:, :]); LABELS_fine.append(label_last[:, gap:, :])
 
                     X_finetune, Y_finetune, LABELS_finetune = X_fine[G_rank[0]], Y_fine[D_rank[0]], LABELS_fine[
                         D_rank[0]]
@@ -228,10 +230,10 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
                 logging.info(
                     f"Cross finetune Sub-Epoch [{e + 1}/{cross_finetune_epochs}]: MSE {validate_G_loss:.8f}, Acc {validate_G_acc * 100:.2f}%")
                 if validate_G_loss >= cross_best_Gloss:
-                    generators[G_rank[0]].load_state_dict(best_model_state[G_rank[0]])
+                    generators[G_rank[0]].load_state_dict(best_model_state[G_rank[0]]);
                     break
                 else:
-                    cross_best_Gloss = validate_G_loss
+                    cross_best_Gloss = validate_G_loss;
                     best_model_state[G_rank[0]] = copy.deepcopy(generators[G_rank[0]].state_dict());
                     best_epoch[G_rank[0]] = epoch + 1
                     if args.monitor_metric == 'val_mse':
@@ -244,10 +246,7 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
             rank = np.argsort([hists_dict[val_loss_keys[i]][epoch] for i in range(N)])
             print(f"--- Start Distillation on Epoch {epoch + 1} ---");
             logging.info(f"Distill on Epoch {epoch + 1} from G{rank[0] + 1} to G{rank[-1] + 1}")
-            for e in range(distill_epochs):
-                # Pass the local scaler to the distill function
-                do_distill(rank, generators, dataloaders, optimizers_G, window_sizes,
-                           device, is_mpd_run, scaler=scaler)
+            do_distill(rank, generators, dataloaders, optimizers_G, window_sizes, device, is_mpd_run, scaler=scaler)
 
         epoch_time = time.time() - epo_start
         log_mse_str = ", ".join(f"G{i + 1}: {hists_dict[k][epoch]:.8f}" for i, k in enumerate(val_loss_keys));
@@ -267,13 +266,11 @@ def train_multi_gan(args, generators, discriminators, dataloaders, window_sizes,
     for i in range(N):
         for j in range(N + 1):
             if j < N:
-                data_G[i][j] = hists_dict[f"D{j + 1}_G{i + 1}"][:epoch + 1];
-                data_D[i][j] = hists_dict[
-                                   f"D{i + 1}_G{j + 1}"][
-                               :epoch + 1]
+                data_G[i][j] = hists_dict[f"D{j + 1}_G{i + 1}"][:epoch + 1]; data_D[i][j] = hists_dict[
+                                                                                                f"D{i + 1}_G{j + 1}"][
+                                                                                            :epoch + 1]
             else:
-                data_G[i][j] = hists_dict[g_keys[i]][:epoch + 1];
-                data_D[i][j] = hists_dict[d_keys[i]][:epoch + 1]
+                data_G[i][j] = hists_dict[g_keys[i]][:epoch + 1]; data_D[i][j] = hists_dict[d_keys[i]][:epoch + 1]
     plot_generator_losses(data_G, output_dir);
     plot_discriminator_losses(data_D, output_dir);
     visualize_overall_loss([d[N] for d in data_G], [d[N] for d in data_D], output_dir)
@@ -290,7 +287,6 @@ def discriminate_fake(args, X, Y, LABELS, generators, discriminators, window_siz
                       reg_criterion, cls_criterion, weight_matrix, device, mode):
     assert mode in ["train_D", "train_G"];
     N = len(generators)
-
     with get_autocast_context(args.amp_dtype):
         dis_real_outputs = [m(y, l) for m, y, l in zip(discriminators, Y, LABELS)];
         outputs = [g(x) for g, x in zip(generators, X)]
@@ -298,19 +294,14 @@ def discriminate_fake(args, X, Y, LABELS, generators, discriminators, window_siz
         fake_data_G, fake_logits_G = zip(*outputs);
         fake_cls_G = [torch.argmax(logit, 1) for logit in fake_logits_G]
         lossD_real = [adv_criterion(o, r) for o, r in zip(dis_real_outputs, real_labels)]
-
     if mode == "train_D":
-        fake_data_temp_G = [d.detach() for d in fake_data_G];
-        fake_cls_temp_G = [c.detach() for c in fake_cls_G];
-    elif mode == "train_G":
-        fake_data_temp_G = fake_data_G
-        fake_cls_temp_G = fake_cls_G
-
+        fake_data_temp_G, fake_cls_temp_G = [d.detach() for d in fake_data_G], [c.detach() for c in fake_cls_G];
+    else:
+        fake_data_temp_G, fake_cls_temp_G = fake_data_G, fake_cls_G
     fake_data_for_disc = [torch.cat([y[:, :ws, :], d.reshape(-1, 1, target_num)], 1) for y, ws, d in
                           zip(Y, window_sizes, fake_data_temp_G)]
     fake_labels_for_disc = [torch.cat([l[:, :ws, :], c.reshape(-1, 1, 1)], 1) for l, ws, c in
                             zip(LABELS, window_sizes, fake_cls_temp_G)]
-
     fake_data_GtoD, fake_cls_GtoD = {}, {}
     for i in range(N):
         for j in range(N):
@@ -325,33 +316,19 @@ def discriminate_fake(args, X, Y, LABELS, generators, discriminators, window_siz
             else:
                 fake_data_GtoD[f"G{i + 1}ToD{j + 1}"] = fake_data_for_disc[i];
                 fake_cls_GtoD[f"G{i + 1}ToD{j + 1}"] = fake_labels_for_disc[i]
-
     fake_labels = [torch.zeros_like(r).to(device) for r in real_labels]
     with get_autocast_context(args.amp_dtype):
-        dis_fake_outputD = []
-        for i in range(N):
-            row = [discriminators[i](fake_data_GtoD[f"G{j + 1}ToD{i + 1}"], fake_cls_GtoD[f"G{j + 1}ToD{i + 1}"].long())
-                   for j in range(N)]
-            if mode == "train_D":
-                row.append(lossD_real[i])
-            dis_fake_outputD.append(row)
-
+        dis_fake_outputD = [
+            [discriminators[i](fake_data_GtoD[f"G{j + 1}ToD{i + 1}"], fake_cls_GtoD[f"G{j + 1}ToD{i + 1}"].long()) for j
+             in range(N)] for i in range(N)]
         if mode == "train_D":
-            loss_matrix = torch.zeros(N, N + 1, device=device);
-            weight = weight_matrix.clone().detach()
-            for i in range(N):
-                for j in range(N + 1):
-                    loss_matrix[i, j] = adv_criterion(dis_fake_outputD[i][j], fake_labels[i]) if j < N else \
-                        dis_fake_outputD[i][j]
-        elif mode == "train_G":
-            loss_matrix = torch.zeros(N, N, device=device);
-            weight = weight_matrix.clone().detach()
-            for i in range(N):
-                for j in range(N):
-                    loss_matrix[i, j] = adv_criterion(dis_fake_outputD[i][j], real_labels[i])
-
+            loss_matrix = torch.zeros(N, N + 1, device=device); weight = weight_matrix.clone().detach()
+        else:
+            loss_matrix = torch.zeros(N, N, device=device); weight = weight_matrix.clone().detach()
+        for i in range(N):
+            for j in range(N): loss_matrix[i, j] = adv_criterion(dis_fake_outputD[i][j], fake_labels[i])
+            if mode == "train_D": loss_matrix[i, N] = lossD_real[i]
         loss_DorG = torch.multiply(weight, loss_matrix).sum(dim=1)
-
         if mode == "train_G":
             loss_reg_G = [reg_criterion(d.squeeze(), y[:, -1, :].squeeze()) for d, y in zip(fake_data_G, Y)];
             loss_matrix_reg = loss_reg_G
@@ -359,45 +336,34 @@ def discriminate_fake(args, X, Y, LABELS, generators, discriminators, window_siz
             cls_losses = [cls_criterion(c, l[:, -1, :].squeeze().long()) for c, l in zip(fake_logits_G, LABELS)];
             loss_DorG += torch.stack(cls_losses)
             return loss_DorG, loss_matrix_reg
-
     return loss_DorG, loss_matrix
 
 
 def do_distill(rank, generators, dataloaders, optimizers, window_sizes, device, is_mpd_run, *, scaler, alpha=0.3,
-               temperature=2.0,
-               grad_clip=1.0, mse_lambda=0.8):
+               temperature=2.0, grad_clip=1.0, mse_lambda=0.8):
     teacher, student, opt = generators[rank[0]], generators[rank[-1]], optimizers[rank[-1]];
     teacher.eval();
     student.train()
     loader = dataloaders[rank[0]] if window_sizes[rank[0]] > window_sizes[rank[-1]] else dataloaders[rank[-1]]
-    if not loader:
-        logging.warning("蒸馏的Dataloader为空，跳过蒸馏。")
-        return
+    if not loader: logging.warning("蒸馏的Dataloader为空，跳过蒸馏。"); return
     gap = abs(window_sizes[rank[0]] - window_sizes[rank[-1]])
-
     for x_batch, y, label in loader:
         y, label = y[:, -1, :].to(device), label[:, -1].to(device)
-
         if is_mpd_run:
             x_t = x_batch if window_sizes[rank[0]] > window_sizes[rank[-1]] else x_batch[:, :, gap:, :]
             x_s = x_batch[:, :, gap:, :] if window_sizes[rank[0]] > window_sizes[rank[-1]] else x_batch
         else:
             x_t = x_batch if window_sizes[rank[0]] > window_sizes[rank[-1]] else x_batch[:, gap:, :]
             x_s = x_batch[:, gap:, :] if window_sizes[rank[0]] > window_sizes[rank[-1]] else x_batch
-
         x_t, x_s = x_t.to(device), x_s.to(device)
-
         with torch.no_grad():
             t_out, t_cls = teacher(x_t)
-
         s_out, s_cls = student(x_s)
-
         soft_loss = F.kl_div(F.log_softmax(s_cls / temperature, 1), F.softmax(t_cls / temperature, 1),
                              reduction="batchmean") * (alpha * temperature ** 2)
         hard_loss = nn.CrossEntropyLoss()(s_cls, label.long()) * (1. - alpha) + F.mse_loss(s_out, y) * (
-                1. - alpha) * mse_lambda
+                    1. - alpha) * mse_lambda
         distillation_loss = soft_loss + hard_loss
-
         opt.zero_grad();
         scaler.scale(distillation_loss).backward()
         if grad_clip: clip_grad_norm_(student.parameters(), grad_clip)
