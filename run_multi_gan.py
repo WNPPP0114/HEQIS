@@ -1,4 +1,4 @@
-# 文件名: run_multi_gan.py
+# 文件名: run_multi_gan.py (最终版：已移除对save_scalers的调用)
 
 import argparse
 import pandas as pd
@@ -69,21 +69,14 @@ def run_experiment_for_stock(args, stock_csv_path):
                           device=local_args.device,
                           seed=local_args.random_seed)
 
-    # 【修改】预训练逻辑，使其为每个需要的window_size进行训练
     if 'mpd' in local_args.generators and local_args.pretrain:
-        # 1. 找出所有mpd模型对应的、独特的window_size
         unique_mpd_window_sizes = sorted(list(set(
             ws for gen, ws in zip(local_args.generators, local_args.window_sizes) if gen == 'mpd'
         )))
-
         print(f"\n--- 发现需要为以下窗口大小进行预训练: {unique_mpd_window_sizes} ---")
-
-        # 2. 循环对每个独特的window_size进行预训练
         for ws in unique_mpd_window_sizes:
-            # 构造特定于窗口大小的权重文件名
             pretrainer_ckpt_path = os.path.join(stock_specific_output_dir,
                                                 f"{local_args.pretrainer_type}_encoder_ws{ws}.pt")
-
             if os.path.exists(pretrainer_ckpt_path):
                 print(f"--- 已找到 window_size={ws} 的预训练权重 '{pretrainer_ckpt_path}'，跳过预训练。 ---")
             else:
@@ -92,11 +85,9 @@ def run_experiment_for_stock(args, stock_csv_path):
                     all_stock_files=[stock_csv_path],
                     pretrainer_ckpt_path=pretrainer_ckpt_path,
                     pretrain_epochs=local_args.pretrain_epochs,
-                    # 传递当前的窗口大小
                     specific_window_size=ws
                 )
-                print(
-                    f"--- window_size={ws} 的 {local_args.pretrainer_type.upper()} 预训练完成。权重已保存至 '{pretrainer_ckpt_path}'。 ---")
+                print(f"--- window_size={ws} 的 {local_args.pretrainer_type.upper()} 预训练完成。权重已保存至 '{pretrainer_ckpt_path}'。 ---")
 
     full_df_path = stock_csv_path
     full_df = pd.read_csv(full_df_path, usecols=['date'])
@@ -112,7 +103,6 @@ def run_experiment_for_stock(args, stock_csv_path):
 
     visualize_feature_correlation(gca)
 
-    # 【修改】可视化重构时，也需要为每个窗口大小分别进行
     if 'mpd' in local_args.generators and local_args.pretrain:
         unique_mpd_window_sizes_vis = sorted(list(set(
             ws for gen, ws in zip(local_args.generators, local_args.window_sizes) if gen == 'mpd'
@@ -120,13 +110,10 @@ def run_experiment_for_stock(args, stock_csv_path):
         for ws in unique_mpd_window_sizes_vis:
             ckpt_path_vis = os.path.join(stock_specific_output_dir, f"{local_args.pretrainer_type}_encoder_ws{ws}.pt")
             if os.path.exists(ckpt_path_vis):
-                # 传递窗口大小，让可视化函数知道要处理哪个模型的数据
                 visualize_reconstruction(gca, ckpt_path_vis, local_args.pretrainer_type, target_window_size=ws)
-                visualize_encoded_feature_correlation(gca, ckpt_path_vis, local_args.pretrainer_type,
-                                                      target_window_size=ws)
+                visualize_encoded_feature_correlation(gca, ckpt_path_vis, local_args.pretrainer_type, target_window_size=ws)
 
     gca.init_model(local_args.num_classes)
-
     logger = setup_experiment_logging(stock_specific_output_dir, vars(local_args), f"train_{stock_name}")
 
     results = None
@@ -135,7 +122,7 @@ def run_experiment_for_stock(args, stock_csv_path):
         if best_model_state and any(s is not None for s in best_model_state):
             print("\n--- 训练结束，保存相关产物 ---")
             gca.save_models(best_model_state)
-            gca.save_scalers()
+            # gca.save_scalers()  # <-- 已移除
             gca.generate_and_save_daily_signals(best_model_state, predict_csv_path)
             print("\n--- 加载最佳模型以生成预测对比CSV ---")
             for i in range(gca.N):

@@ -1,4 +1,4 @@
-# 文件名: models/pretrainer.py
+# 文件名: models/pretrainer.py (已修改为在特征相关性热力图中包含'close'列)
 
 import torch
 import torch.nn as nn
@@ -249,36 +249,65 @@ def visualize_reconstruction(ts_maa_instance, pretrainer_ckpt_path, pretrainer_t
 
 
 def visualize_feature_correlation(ts_maa_instance):
-    print("\n--- 开始生成特征相关性热力图 (原始特征) ---")
-    if not hasattr(ts_maa_instance, 'feature_columns') or not ts_maa_instance.feature_columns: return
+    # --- 核心修改开始 ---
+    print("\n--- 开始生成特征相关性热力图 (已包含 'close' 列) ---")
+    if not hasattr(ts_maa_instance, 'feature_columns') or not ts_maa_instance.feature_columns:
+        print("警告: ts_maa_instance 中未找到 'feature_columns' 属性，跳过热力图生成。")
+        return
+
     train_csv_path = ts_maa_instance.args.train_csv_path
-    if not os.path.exists(train_csv_path): return
-    df_train = pd.read_csv(train_csv_path);
-    df_features = df_train[ts_maa_instance.feature_columns].copy()
+    if not os.path.exists(train_csv_path):
+        print(f"警告: 找不到训练数据文件 '{train_csv_path}'，跳过热力图生成。")
+        return
+
+    df_train = pd.read_csv(train_csv_path)
+
+    # 获取原始的、不包含 'close' 的特征列表
+    original_feature_cols = ts_maa_instance.feature_columns
+
+    # 显式地将 'close' 添加到要可视化的列列表中
+    # 使用 dict.fromkeys 来去重并保持大致顺序，确保 'close' 只被添加一次
+    cols_for_heatmap = list(dict.fromkeys(original_feature_cols + ['close']))
+
+    # 从原始数据帧中选择这些列用于绘图
+    df_features = df_train[cols_for_heatmap].copy()
+    # --- 核心修改结束 ---
+
     df_features = df_features.loc[:, df_features.var() > 1e-8]
-    if df_features.shape[1] < 2: return
+    if df_features.shape[1] < 2:
+        print("警告: 用于热力图的有效特征数量少于2，跳过。")
+        return
+
     corr_matrix = df_features.corr(method='pearson')
     plt.style.use('seaborn-v0_8-whitegrid')
     try:
         plt.rcParams['font.family'] = ['SimHei', 'Microsoft YaHei', 'sans-serif'];
-        plt.rcParams[
-            'axes.unicode_minus'] = False
+        plt.rcParams['axes.unicode_minus'] = False
     except:
         pass
+
     plt.figure(figsize=(22, 18))
     sns.heatmap(corr_matrix, cmap='coolwarm', annot=False, fmt=".2f", linewidths=.5, vmin=-1, vmax=1)
-    path_parts = ts_maa_instance.output_dir.replace('\\', '/').split('/');
-    stock_name = path_parts[-1];
+
+    path_parts = ts_maa_instance.output_dir.replace('\\', '/').split('/')
+    stock_name = path_parts[-1]
     sector_name = path_parts[-2]
-    plt.title(f'原始技术指标相关性热力图\n股票: {sector_name} - {stock_name}', fontsize=24, pad=20)
+
+    # 更新图表标题以反映 'close' 已被包含
+    plt.title(f'特征与收盘价(close)相关性热力图\n股票: {sector_name} - {stock_name}', fontsize=24, pad=20)
+
     plt.xticks(rotation=90, fontsize=10);
     plt.yticks(rotation=0, fontsize=10)
+
     vis_dir = os.path.join(ts_maa_instance.output_dir, "pretrain_vis", "feature_analysis")
-    os.makedirs(vis_dir, exist_ok=True);
-    save_path = os.path.join(vis_dir, 'original_feature_correlation_heatmap.png')
-    plt.savefig(save_path, dpi=300, bbox_inches='tight');
+    os.makedirs(vis_dir, exist_ok=True)
+
+    save_path = os.path.join(vis_dir, 'feature_and_close_correlation_heatmap.png')  # 修改保存文件名
+
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"已成功保存原始特征相关性热力图至: {save_path}")
+
+    print(f"已成功保存包含 'close' 的特征相关性热力图至: {save_path}")
 
 
 def visualize_encoded_feature_correlation(ts_maa_instance, pretrainer_ckpt_path, pretrainer_type,

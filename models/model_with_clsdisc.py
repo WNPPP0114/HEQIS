@@ -58,7 +58,7 @@ class PositionalEncoding(nn.Module):
 class Generator_mpd(nn.Module):
     def __init__(self, input_height, input_width, num_classes,
                  pretrainer_type='cae',
-                 feature_size=512, num_layers=2, num_heads=16,
+                 feature_size=1024, num_layers=3, num_heads=8,
                  dropout=0.1, output_len=1,
                  use_rope=False):
         super().__init__()
@@ -133,8 +133,8 @@ class Generator_dct(nn.Module):
     def __init__(self, input_dim, out_size, num_classes,
                  inception_channels=[96, 256, 384],
                  d_model=768, mlp_size=3072,
-                 transformer_layers=12, transformer_heads=8,
-                 transformer_dropout=0.3, activation=nn.ReLU,
+                 transformer_layers=3, transformer_heads=8,
+                 transformer_dropout=0.1, activation=nn.ReLU,
                  use_rope=False):
         super().__init__()
         self.use_rope = use_rope
@@ -190,7 +190,7 @@ class Generator_dct(nn.Module):
 
 
 class Generator_gru(nn.Module):
-    def __init__(self, input_size, out_size, hidden_dim=128, use_rope=False):
+    def __init__(self, input_size, out_size, hidden_dim=768, use_rope=False):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.use_rope = use_rope
@@ -259,7 +259,7 @@ class Generator_lstm(nn.Module):
 
 
 class Generator_bigru(nn.Module):
-    def __init__(self, input_size, out_size, hidden_dim=512, num_layers=2, use_rope=False):
+    def __init__(self, input_size, out_size, hidden_dim=256, num_layers=2, use_rope=False):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.use_rope = use_rope
@@ -318,7 +318,7 @@ class Generator_bilstm(nn.Module):
 
 
 class Generator_transformer(nn.Module):
-    def __init__(self, input_dim, feature_size=512, num_layers=2, num_heads=16, dropout=0.1, output_len=1,
+    def __init__(self, input_dim, feature_size=512, num_layers=2, num_heads=8, dropout=0.1, output_len=1,
                  use_rope=False):
         super().__init__()
         self.use_rope = use_rope

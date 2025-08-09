@@ -71,11 +71,11 @@ STRATEGY_CONFIG = {
     "ONE_WORD_BOARD_SPIKE_NO_BUY": True, # 昨日一字板涨停，今日爆量，则禁止买入
     "LOSS_BAN": False,  # 在一笔亏损交易后，禁止在N天内再次买入
     "DAILY_GAIN_LIMIT": False,  # 当日涨幅过高（如超过6%）时，即使有买入信号也禁止买入
-    "MA_TREND": False,  # 仅当短期均线在长期均线之上（多头趋势）时才允许买入
+    "MA_TREND": True,  # 仅当短期均线在长期均线之上（多头趋势）时才允许买入
     "RSI_CHECK": False,  # (未实现) 仅当RSI指标未处于超买区时才允许买入
     "ADX_CHECK": False,  # 仅当ADX指标显示有趋势时才允许买入
     "PREDICTED_PRICE_INCREASE": False,  # (未实现) 仅当模型预测的下一个价格高于当前价格时才买入
-    "GAP_UP_FALL_BACK": True,  # (未实现) 当日大幅高开后回落时，即使有买入信号也禁止买入
+    "GAP_UP_FALL_BACK": False,  # (未实现) 当日大幅高开后回落时，即使有买入信号也禁止买入
 }
 
 # ==================== 策略参数配置 (数值) ====================
@@ -96,7 +96,7 @@ STRATEGY_PARAMS = {
     "ONE_WORD_BOARD_PCT_CHG_THRESHOLD": 9.6,  # 定义“一字板”的涨幅阈值
     "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,  # “一字板”次日成交量需要是前一日的多少倍才触发卖出/禁止买入
     "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE": 0.01,  # 定义“一字板”时，开盘价与收盘价差异的容忍度 (1%)
-    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 30,  # 在执行“一字板爆量”卖出或禁止买入后，禁止买入该股票的交易日数
+    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 10,  # 在执行“一字板爆量”卖出或禁止买入后，禁止买入该股票的交易日数
 
     # 买入条件参数
     "LOSS_BAN_DAYS": 3,  # 亏损交易后，禁止买入的天数
@@ -104,7 +104,7 @@ STRATEGY_PARAMS = {
     "DAILY_DROP_LIMIT": -9.5,  # 定义“跌停”的跌幅阈值 (-9.5%)
     # 均线趋势判断参数
     "SHORT_MA_PERIOD_FOR_TREND": 5,
-    "LONG_MA_PERIOD_FOR_TREND": 20,
+    "LONG_MA_PERIOD_FOR_TREND": 10,
     "MA_PERIOD_FOR_TREND": 5,
     "GAP_UP_THRESHOLD": 8.0,  # 定义“大幅高开”的阈值 (8.0%)
 
