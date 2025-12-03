@@ -1,4 +1,4 @@
-# 文件名: filter_trading_signals.py (已修改)
+# 文件名: filter_trading_signals.py (修复版：修复日期合并问题与增加调试信息)
 
 import pandas as pd
 import os
@@ -11,7 +11,6 @@ import math
 from datetime import timedelta
 import multiprocessing
 import shutil
-# --- 新增绘图相关的库 ---
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
 import matplotlib.ticker as mticker
@@ -49,73 +48,52 @@ ORIGINAL_SIGNALS_BASE_DIR = 'output/multi_gan'
 RAW_DATA_BASE_DIR = 'csv_data/predict'
 FILTERED_OUTPUT_BASE_DIR = 'output_filtered_signals'
 
-# ==================== 策略开关配置 (布尔值: True/False) ====================
-# 这里定义了各种交易策略的开关。True表示启用该策略，False表示禁用。
-# 这些开关共同决定了在回测中如何过滤原始的买卖信号。
+# ==================== 策略开关配置 ====================
 STRATEGY_CONFIG = {
-    # 卖出过滤策略
-    "LIMIT_UP_NO_SELL": True,  # 当日涨停时，即使有卖出信号也强制持有不卖出
-    "ONE_WORD_BOARD_SELL": True,  # 启用“一字板”次日卖出策略（检测到昨日一字板涨停，今日放量则卖出）
-
-    # 止损/止盈类策略
-    "STOP_LOSS": False,  # 启用基于买入成本的固定比例止损
-
-    # 持有条件策略 (决定是否继续持有股票)
-    "CONSECUTIVE_UP_HOLD": False,  # (未实现) 连续上涨N天后，即使有卖出信号也继续持有
-    "HOLD_ABOVE_MA": False,  # (未实现) 只要股价在某条移动平均线之上，就无视卖出信号继续持有
-    "NO_DROP_SINCE_BUY_HOLD": False,  # (未实现) 自买入以来，如果股价从未跌破买入价，则无视卖出信号继续持有
-
-    # 买入过滤策略
-    "DAILY_DROP_LIMIT": True,  # 当日跌停（或接近跌停）时，即使有买入信号也禁止买入
-    "ONE_WORD_BOARD_NO_BUY": True,  # 当日一字板涨停时，即使有买入信号也禁止买入
-    "ONE_WORD_BOARD_SPIKE_NO_BUY": True, # 昨日一字板涨停，今日爆量，则禁止买入
-    "LOSS_BAN": False,  # 在一笔亏损交易后，禁止在N天内再次买入
-    "DAILY_GAIN_LIMIT": False,  # 当日涨幅过高（如超过6%）时，即使有买入信号也禁止买入
-    "MA_TREND": True,  # 仅当短期均线在长期均线之上（多头趋势）时才允许买入
-    "RSI_CHECK": False,  # (未实现) 仅当RSI指标未处于超买区时才允许买入
-    "ADX_CHECK": False,  # 仅当ADX指标显示有趋势时才允许买入
-    "PREDICTED_PRICE_INCREASE": False,  # (未实现) 仅当模型预测的下一个价格高于当前价格时才买入
-    "GAP_UP_FALL_BACK": False,  # (未实现) 当日大幅高开后回落时，即使有买入信号也禁止买入
+    "LIMIT_UP_NO_SELL": True,
+    "ONE_WORD_BOARD_SELL": True,
+    "STOP_LOSS": False,
+    "CONSECUTIVE_UP_HOLD": False,
+    "HOLD_ABOVE_MA": False,
+    "NO_DROP_SINCE_BUY_HOLD": False,
+    "DAILY_DROP_LIMIT": True,
+    "ONE_WORD_BOARD_NO_BUY": True,
+    "ONE_WORD_BOARD_SPIKE_NO_BUY": True,
+    "LOSS_BAN": False,
+    "DAILY_GAIN_LIMIT": False,
+    "MA_TREND": True,
+    "RSI_CHECK": False,
+    "ADX_CHECK": False,
+    "PREDICTED_PRICE_INCREASE": False,
+    "GAP_UP_FALL_BACK": False,
 }
 
-# ==================== 策略参数配置 (数值) ====================
-# 这里定义了与上述策略开关相对应的具体数值参数。
+# ==================== 策略参数配置 ====================
 STRATEGY_PARAMS = {
-    # 模式2信号生成参数
-    "PREDICTED_UP_THRESHOLD": 0.00,  # 在模式2中，预测价格需比前一日高出此百分比才生成买入信号(0.01 = 1%)
-    "PREDICTED_DOWN_THRESHOLD": 0.00,  # 在模式2中，预测价格需比前一日低出此百分比才生成卖出信号(0.01 = 1%)
-
-    # 止损/止盈参数
-    "STOP_LOSS_THRESHOLD": -0.2,  # 止损阈值，当亏损达到20%时触发 (-0.2 = -20%)
-    "LIMIT_UP_THRESHOLD": 9.6,  # 定义“涨停”的涨幅阈值 (9.6%)
-
-    # 卖出条件参数
-    "SELL_SMA_PERIOD": 5,  # 用于“跌破均线卖出”策略的移动平均线周期
-
-    # “一字板”策略相关参数
-    "ONE_WORD_BOARD_PCT_CHG_THRESHOLD": 9.6,  # 定义“一字板”的涨幅阈值
-    "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,  # “一字板”次日成交量需要是前一日的多少倍才触发卖出/禁止买入
-    "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE": 0.01,  # 定义“一字板”时，开盘价与收盘价差异的容忍度 (1%)
-    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 10,  # 在执行“一字板爆量”卖出或禁止买入后，禁止买入该股票的交易日数
-
-    # 买入条件参数
-    "LOSS_BAN_DAYS": 3,  # 亏损交易后，禁止买入的天数
-    "DAILY_GAIN_LIMIT": 6.0,  # 定义“涨幅过高”的阈值 (6.0%)
-    "DAILY_DROP_LIMIT": -9.5,  # 定义“跌停”的跌幅阈值 (-9.5%)
-    # 均线趋势判断参数
+    "PREDICTED_UP_THRESHOLD": 0.00,
+    "PREDICTED_DOWN_THRESHOLD": 0.00,
+    "STOP_LOSS_THRESHOLD": -0.2,
+    "LIMIT_UP_THRESHOLD": 9.6,
+    "SELL_SMA_PERIOD": 5,
+    "ONE_WORD_BOARD_PCT_CHG_THRESHOLD": 9.6,
+    "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,
+    "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE": 0.01,
+    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 10,
+    "LOSS_BAN_DAYS": 3,
+    "DAILY_GAIN_LIMIT": 6.0,
+    "DAILY_DROP_LIMIT": -9.5,
     "SHORT_MA_PERIOD_FOR_TREND": 5,
     "LONG_MA_PERIOD_FOR_TREND": 10,
     "MA_PERIOD_FOR_TREND": 5,
-    "GAP_UP_THRESHOLD": 8.0,  # 定义“大幅高开”的阈值 (8.0%)
-
-    # 技术指标相关阈值
-    "RSI_OVERSOLD_THRESHOLD": 80,  # RSI超买区的阈值
-    "ADX_BUY_THRESHOLD": 20,  # ADX趋势强度阈值
+    "GAP_UP_THRESHOLD": 8.0,
+    "RSI_OVERSOLD_THRESHOLD": 80,
+    "ADX_BUY_THRESHOLD": 20,
 }
+
+
 # ==============================================================================
 # --- 辅助函数 ---
 # ==============================================================================
-# ... plot_trade_analysis 和 generate_initial_signals 函数保持不变 ...
 def plot_trade_analysis(trades_df, daily_equity_curve, stock_info, output_dir):
     stock_name = stock_info['stock_name']
     generator_index = stock_info['generator_index']
@@ -133,7 +111,11 @@ def plot_trade_analysis(trades_df, daily_equity_curve, stock_info, output_dir):
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.axhline(0, color='gray', linewidth=0.8)
         plt.tight_layout(pad=1.5)
-        plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_individual_trades_returns.png'), dpi=300)
+        try:
+            plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_individual_trades_returns.png'),
+                        dpi=300)
+        except Exception as e:
+            print(f"保存图片失败: {e}")
         plt.close()
 
     if not daily_equity_curve.empty:
@@ -156,17 +138,29 @@ def plot_trade_analysis(trades_df, daily_equity_curve, stock_info, output_dir):
         ax_drawdown.set_ylim(bottom=0)
 
         plt.tight_layout(pad=1.5)
-        plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_cumulative_return_drawdown.png'), dpi=300)
+        try:
+            plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_cumulative_return_drawdown.png'),
+                        dpi=300)
+        except Exception as e:
+            print(f"保存图片失败: {e}")
         plt.close()
 
 
 def generate_initial_signals(df_merged: pd.DataFrame, mode: int) -> pd.Series:
-    if 'predicted_action_from_model' not in df_merged.columns: raise KeyError("'predicted_action'列缺失。")
+    if 'predicted_action_from_model' not in df_merged.columns:
+        # 尝试容错，如果rename没成功或者列名本身就是predicted_action
+        if 'predicted_action' in df_merged.columns:
+            df_merged.rename(columns={'predicted_action': 'predicted_action_from_model'}, inplace=True)
+        else:
+            raise KeyError(
+                f"'predicted_action' 或 'predicted_action_from_model' 列缺失。现有列: {list(df_merged.columns)}")
+
     if mode == 1:
         return df_merged['predicted_action_from_model']
     elif mode == 2:
-        if 'predicted_close' not in df_merged.columns: raise KeyError("模式2需要'predicted_close'列。")
-        actions = pd.Series(1, index=df_merged.index, dtype=int);
+        if 'predicted_close' not in df_merged.columns:
+            raise KeyError(f"模式2需要'predicted_close'列。现有列: {list(df_merged.columns)}")
+        actions = pd.Series(1, index=df_merged.index, dtype=int)
         df_s = df_merged.sort_values('date')
         prev_close = df_s['predicted_close'].shift(1)
         actions[df_s['predicted_close'] > prev_close * (1 + STRATEGY_PARAMS["PREDICTED_UP_THRESHOLD"])] = 2
@@ -181,57 +175,71 @@ def generate_initial_signals(df_merged: pd.DataFrame, mode: int) -> pd.Series:
 # ==============================================================================
 def run_backtest_for_strategy(task_info):
     original_signal_filepath, signal_gen_mode = task_info['filepath'], task_info['mode']
+    ts_code = task_info.get('ts_code', 'N/A')
+
     try:
         relative_path = os.path.relpath(original_signal_filepath, ORIGINAL_SIGNALS_BASE_DIR)
         path_parts = relative_path.replace('\\', '/').split('/')
-        if len(path_parts) < 3: return None
+        if len(path_parts) < 3:
+            print(f"[错误] 路径解析失败 (depth<3): {relative_path}")
+            return None
         sector_name, stock_name, original_filename = path_parts[0], path_parts[1], path_parts[2]
 
         try:
             gen_idx_str = original_filename.split('_')[0].replace('G', '')
             generator_index = int(gen_idx_str)
         except (ValueError, IndexError):
+            print(f"[错误] 无法从文件名解析生成器索引: {original_filename}")
             return None
 
-        ts_code = task_info.get('ts_code', 'N/A')
         print(f"正在处理 {stock_name}({ts_code}) G{generator_index} (模式 {signal_gen_mode})...")
 
         raw_data_pattern = os.path.join(RAW_DATA_BASE_DIR, sector_name, stock_name, "*.csv")
         raw_data_files = glob.glob(raw_data_pattern)
-        if not raw_data_files: return None
+        if not raw_data_files:
+            print(f"[错误] 未找到原始行情数据: {raw_data_pattern}")
+            return None
 
-        short_ma_period = STRATEGY_PARAMS.get("SHORT_MA_PERIOD_FOR_TREND", 5)
-        long_ma_period = STRATEGY_PARAMS.get("LONG_MA_PERIOD_FOR_TREND", 20)
-        adx_period = 14
+        # 读取原始数据（不做列过滤，防止lambda误杀）
+        df_raw = pd.read_csv(raw_data_files[0], dtype={'date': str})
 
-        required_cols_raw = ['date', 'open', 'high', 'low', 'close', 'volume', 'pctChg']
-
-        if STRATEGY_CONFIG.get("MA_TREND", False):
-            required_cols_raw.extend([f'sma_{short_ma_period}', f'sma_{long_ma_period}'])
-        if STRATEGY_CONFIG.get("ADX_CHECK", False):
-            required_cols_raw.append(f'adx_{adx_period}')
-
-        required_cols_raw = list(set(required_cols_raw))
-
-        df_raw = pd.read_csv(raw_data_files[0], dtype={'date': str}, usecols=lambda c: c in required_cols_raw)
+        # 读取信号数据
         df_signals = pd.read_csv(original_signal_filepath, dtype={'date': str})
 
+        # --- 关键修复：统一日期格式处理 ---
+        # 移除破折号，确保格式为 YYYYMMDD
+        df_raw['date'] = df_raw['date'].astype(str).str.replace('-', '').str.replace('/', '')
+        df_signals['date'] = df_signals['date'].astype(str).str.replace('-', '').str.replace('/', '')
+
+        # 转换为 datetime
         df_raw['date'] = pd.to_datetime(df_raw['date'], format='%Y%m%d', errors='coerce')
         df_signals['date'] = pd.to_datetime(df_signals['date'], format='%Y%m%d', errors='coerce')
-        df_signals.rename(columns={'predicted_action': 'predicted_action_from_model'}, inplace=True)
-        df_merged = pd.merge(df_raw, df_signals, on='date', how='inner').sort_values('date').set_index('date')
-        if df_merged.empty: return None
 
+        # 检查重命名列
+        if 'predicted_action' in df_signals.columns:
+            df_signals.rename(columns={'predicted_action': 'predicted_action_from_model'}, inplace=True)
+
+        # 合并数据
+        df_merged = pd.merge(df_raw, df_signals, on='date', how='inner').sort_values('date').set_index('date')
+
+        if df_merged.empty:
+            print(f"[失败] 数据合并后为空。请检查日期范围是否重叠。")
+            print(f"  Raw dates: {df_raw['date'].min()} ~ {df_raw['date'].max()} ({len(df_raw)} rows)")
+            print(f"  Sig dates: {df_signals['date'].min()} ~ {df_signals['date'].max()} ({len(df_signals)} rows)")
+            return None
+
+        # 生成初始信号
         df_merged['predicted_action'] = generate_initial_signals(df_merged.reset_index(), signal_gen_mode).values
 
+        # 准备回测所需的列（平移）
         df_merged['open_T+1'] = df_merged['open'].shift(-1)
         df_merged['open_prev1'] = df_merged['open'].shift(1)
         df_merged['close_prev1'] = df_merged['close'].shift(1)
         df_merged['pctChg_prev1'] = df_merged['pctChg'].shift(1)
         df_merged['volume_prev1'] = df_merged['volume'].shift(1)
 
-        trades_log = [];
-        daily_actions_log = [];
+        trades_log = []
+        daily_actions_log = []
         current_position = None
         shares_bought, total_buy_cost = 0, 0.0
         one_word_board_ban_end_date = pd.NaT
@@ -269,7 +277,6 @@ def run_backtest_for_strategy(task_info):
                     )
                     if is_dm1_one_word_board and is_vol_spike:
                         is_dm1_one_word_board_spike = True
-            # --- 结束公共条件判断 ---
 
             if current_position == 'long':
                 if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"] and is_dm1_one_word_board_spike:
@@ -282,7 +289,6 @@ def run_backtest_for_strategy(task_info):
 
                     if not is_hold_filtered and pred_for_Tplus1 == 0:
                         action_to_take = 'Sell'
-
 
             elif current_position is None:
                 can_buy = (pred_for_Tplus1 == 2)
@@ -303,7 +309,6 @@ def run_backtest_for_strategy(task_info):
                     if is_today_one_word_board:
                         can_buy = False
 
-                # 【修改】当一字板爆量时，不仅禁止买入，还要触发交易禁令
                 if can_buy and STRATEGY_CONFIG.get("ONE_WORD_BOARD_SPIKE_NO_BUY",
                                                    False) and is_dm1_one_word_board_spike:
                     can_buy = False
@@ -316,17 +321,24 @@ def run_backtest_for_strategy(task_info):
                     can_buy = False
 
                 if can_buy and STRATEGY_CONFIG.get("MA_TREND", False):
+                    short_ma_period = STRATEGY_PARAMS["SHORT_MA_PERIOD_FOR_TREND"]
+                    long_ma_period = STRATEGY_PARAMS["LONG_MA_PERIOD_FOR_TREND"]
                     short_ma_col = f'sma_{short_ma_period}'
                     long_ma_col = f'sma_{long_ma_period}'
+
+                    # 检查列是否存在，如果不存在则发出警告并跳过MA检查（或者默认为不买入）
                     if short_ma_col in row_T and long_ma_col in row_T:
                         short_ma_val = row_T[short_ma_col]
                         long_ma_val = row_T[long_ma_col]
                         if pd.isna(short_ma_val) or pd.isna(long_ma_val) or short_ma_val <= long_ma_val:
                             can_buy = False
                     else:
+                        # 如果没有SMA数据，无法判断趋势，保守起见禁止买入
+                        # print(f"警告：缺少MA列 ({short_ma_col}, {long_ma_col})，跳过买入")
                         can_buy = False
 
                 if can_buy and STRATEGY_CONFIG.get("ADX_CHECK", False):
+                    adx_period = 14
                     adx_col = f'adx_{adx_period}'
                     if adx_col in row_T:
                         adx_val = row_T[adx_col]
@@ -356,7 +368,6 @@ def run_backtest_for_strategy(task_info):
                         trades_log.append({'exit_date': next_trade_date, 'return': trade_return})
                         current_position = None
 
-                        # 【修改】使用新的通用参数来设置交易禁令
                         if action_to_take == "Sell_One_Word":
                             ban_days = STRATEGY_PARAMS.get("ONE_WORD_BOARD_SPIKE_BAN_DAYS", 10)
                             one_word_board_ban_end_date = next_trade_date + timedelta(days=ban_days)
@@ -366,7 +377,6 @@ def run_backtest_for_strategy(task_info):
 
                         daily_equity *= (1 + trade_return)
                         equity_curve_points.append((next_trade_date, daily_equity))
-
 
                 elif action_to_take == "Buy":
                     buy_price = row_T['open_T+1']
@@ -385,7 +395,7 @@ def run_backtest_for_strategy(task_info):
                                 current_position = 'long'
                                 total_buy_cost, shares_bought = buy_value + buy_fee, shares_to_buy
 
-        # ... (后续的指标计算和文件保存逻辑保持不变) ...
+        # --- 后处理与统计 ---
         if not equity_curve_points:
             daily_equity_curve = pd.Series(1.0, index=df_merged.index)
         else:
@@ -446,8 +456,10 @@ def run_backtest_for_strategy(task_info):
         return {'ts_code': ts_code, 'stock_name': stock_name, 'sector': sector_name, 'generator_index': generator_index,
                 'mode': signal_gen_mode, **metrics}
 
-    except Exception:
-        traceback.print_exc()
+    except Exception as e:
+        # 将错误信息打印到 stderr，防止被多进程 swallow
+        sys.stderr.write(f"\n[异常] 处理 {stock_name} G{generator_index} 模式 {signal_gen_mode} 时出错:\n")
+        traceback.print_exc(file=sys.stderr)
         return None
 
 
@@ -455,7 +467,6 @@ def run_backtest_for_strategy(task_info):
 # --- 主执行 ---
 # ==============================================================================
 if __name__ == '__main__':
-    # ... (主执行部分保持不变) ...
     multiprocessing.freeze_support()
     print(FONT_SETUP_MESSAGE)
 
@@ -534,7 +545,7 @@ if __name__ == '__main__':
                 best_metric_fallback = None
                 if stock_metrics:
                     best_metric_fallback = max(stock_metrics, key=lambda x: (
-                    x.get('num_trades', 0), x.get('cumulative_return_percentage', -float('inf'))))
+                        x.get('num_trades', 0), x.get('cumulative_return_percentage', -float('inf'))))
                 best_metric = best_metric_fallback if best_metric_fallback else {'generator_index': 'N/A',
                                                                                  'mode': 'N/A', 'num_trades': 0,
                                                                                  'cumulative_return_percentage': 0.0,
