@@ -1,598 +1,420 @@
-# 文件名: filter_trading_signals.py (日期解析增强版)
+# get_stock_data.py (最终修复版：修复FutureWarning警告)
 
+import tushare as ts
 import pandas as pd
+import talib
 import os
-import glob
-import numpy as np
+import time
+from datetime import datetime, timedelta
 import traceback
-import argparse
+from typing import Optional, Tuple, List, Dict
 import sys
-import math
-from datetime import timedelta
+import json
 import multiprocessing
-import shutil
-import matplotlib.pyplot as plt
-import matplotlib.font_manager
-import matplotlib.ticker as mticker
+import argparse
+import numpy as np
+import re
+import joblib
+from sklearn.preprocessing import MinMaxScaler
 
+# --- 配置区 ---
+TUSHARE_TOKEN = '5c9bcf56aeee0f2738748e413c0bd3112e22b0897618eaf7f9b4ca41'
+BASE_DATA_DIR = 'csv_data'
+TRAIN_SUBDIR = 'train'
+PREDICT_SUBDIR = 'predict'
+USE_ADJUSTED_DATA = True
+INDICATOR_WARMUP_PERIOD = 240
+TRAIN_DATA_FETCH_START_DATE = '20120101'
+USER_TRAIN_END_DATE = '20250630'
+PREDICT_DATA_USER_END_DATE = '20251201'
 
-# ==============================================================================
-# --- 全局字体配置变量 ---
-# ==============================================================================
-def setup_matplotlib_font():
-    chinese_fonts = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK JP', 'Source Han Sans CN',
-                     'Arial Unicode MS']
-    found_font = next((font_name for font_name in chinese_fonts if
-                       any(font_name.lower() in font.name.lower() for font in
-                           matplotlib.font_manager.fontManager.ttflist)),
-                      None)
-    if found_font:
-        plt.rcParams['font.family'] = [found_font, 'sans-serif']
-        return f"绘图模块已加载中文字体: {found_font}"
-    else:
-        plt.rcParams['font.family'] = ['sans-serif']
-        return "警告: 未找到指定的中文字体, 图表中的中文可能无法正常显示。"
-
-
-FONT_SETUP_MESSAGE = setup_matplotlib_font()
-plt.rcParams['axes.unicode_minus'] = False
-plt.rcParams['font.size'] = 10
-
-# ==============================================================================
-# --- 总配置区 ---
-# ==============================================================================
-INITIAL_CAPITAL = 1000000
-TRANSACTION_FEE_RATE = 0.00025
-MIN_TRANSACTION_FEE = 5.0
-ORIGINAL_SIGNALS_BASE_DIR = 'output/multi_gan'
-RAW_DATA_BASE_DIR = 'csv_data/predict'
-FILTERED_OUTPUT_BASE_DIR = 'output_filtered_signals'
-
-# ==================== 策略开关配置 ====================
-STRATEGY_CONFIG = {
-    "LIMIT_UP_NO_SELL": True,
-    "ONE_WORD_BOARD_SELL": True,
-    "STOP_LOSS": False,
-    "CONSECUTIVE_UP_HOLD": False,
-    "HOLD_ABOVE_MA": False,
-    "NO_DROP_SINCE_BUY_HOLD": False,
-    "DAILY_DROP_LIMIT": True,
-    "ONE_WORD_BOARD_NO_BUY": True,
-    "ONE_WORD_BOARD_SPIKE_NO_BUY": True,
-    "LOSS_BAN": False,
-    "DAILY_GAIN_LIMIT": False,
-    "MA_TREND": True,
-    "RSI_CHECK": False,
-    "ADX_CHECK": False,
-    "PREDICTED_PRICE_INCREASE": False,
-    "GAP_UP_FALL_BACK": False,
+stock_info_dict = {
+    "培育钻石": ["黄河旋风"],
+    "云计算": ["美利云", "云赛智联"],
 }
 
-# ==================== 策略参数配置 ====================
-STRATEGY_PARAMS = {
-    "PREDICTED_UP_THRESHOLD": 0.00,
-    "PREDICTED_DOWN_THRESHOLD": 0.00,
-    "STOP_LOSS_THRESHOLD": -0.2,
-    "LIMIT_UP_THRESHOLD": 9.6,
-    "SELL_SMA_PERIOD": 5,
-    "ONE_WORD_BOARD_PCT_CHG_THRESHOLD": 9.6,
-    "ONE_WORD_BOARD_VOLUME_MULTIPLIER": 4.0,
-    "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE": 0.01,
-    "ONE_WORD_BOARD_SPIKE_BAN_DAYS": 10,
-    "LOSS_BAN_DAYS": 3,
-    "DAILY_GAIN_LIMIT": 6.0,
-    "DAILY_DROP_LIMIT": -9.5,
-    "SHORT_MA_PERIOD_FOR_TREND": 5,
-    "LONG_MA_PERIOD_FOR_TREND": 10,
-    "MA_PERIOD_FOR_TREND": 5,
-    "GAP_UP_THRESHOLD": 8.0,
-    "RSI_OVERSOLD_THRESHOLD": 80,
-    "ADX_BUY_THRESHOLD": 20,
-}
+# --- Tushare API 初始化 ---
+try:
+    ts.set_token(TUSHARE_TOKEN)
+    pro = ts.pro_api()
+except Exception as e:
+    print(f"错误: 无法在 get_stock_data.py 中全局初始化 Tushare Pro API 'pro': {e}")
+    pro = None
 
 
-# ==============================================================================
+def get_tushare_pro_instance():
+    return ts.pro_api(token=TUSHARE_TOKEN)
+
+
+GLOBAL_TRADE_CAL_DF: Optional[pd.DataFrame] = None
+
+
 # --- 辅助函数 ---
-# ==============================================================================
-def plot_trade_analysis(trades_df, daily_equity_curve, stock_info, output_dir):
-    stock_name = stock_info['stock_name']
-    generator_index = stock_info['generator_index']
-    mode = stock_info['mode']
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    if not trades_df.empty:
-        plt.figure(figsize=(14, 7))
-        colors = ['red' if r > 0 else 'green' for r in trades_df['return']]
-        plt.bar(range(len(trades_df)), trades_df['return'] * 100, color=colors)
-        plt.title(f'{stock_name} (G{generator_index}, Mode {mode}) - 每笔交易收益率', fontsize=16)
-        plt.xlabel('交易笔数', fontsize=12)
-        plt.ylabel('收益率 (%)', fontsize=12)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.axhline(0, color='gray', linewidth=0.8)
-        plt.tight_layout(pad=1.5)
-        try:
-            plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_individual_trades_returns.png'),
-                        dpi=300)
-        except Exception:
-            pass
-        plt.close()
-
-    if not daily_equity_curve.empty:
-        fig, (ax_equity, ax_drawdown) = plt.subplots(2, 1, figsize=(14, 10), sharex=True,
-                                                     gridspec_kw={'height_ratios': [3, 1]})
-
-        ax_equity.plot(daily_equity_curve.index, daily_equity_curve, label='策略累积净值', color='blue', linewidth=2)
-        ax_equity.set_title(f'{stock_name} (G{generator_index}, Mode {mode}) - 累积收益与回撤', fontsize=16)
-        ax_equity.set_ylabel('组合净值', fontsize=12)
-        ax_equity.grid(True, linestyle='--', alpha=0.6)
-        ax_equity.legend(loc='upper left')
-
-        rolling_max = daily_equity_curve.expanding().max()
-        drawdown = (rolling_max - daily_equity_curve) / rolling_max
-        ax_drawdown.fill_between(daily_equity_curve.index, 0, drawdown, color='green', alpha=0.3, label='回撤')
-        ax_drawdown.set_ylabel('回撤', fontsize=12)
-        ax_drawdown.set_xlabel('日期', fontsize=12)
-        ax_drawdown.grid(True, linestyle='--', alpha=0.6)
-        ax_drawdown.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
-        ax_drawdown.set_ylim(bottom=0)
-
-        plt.tight_layout(pad=1.5)
-        try:
-            plt.savefig(os.path.join(output_dir, f'G{generator_index}_mode{mode}_cumulative_return_drawdown.png'),
-                        dpi=300)
-        except Exception:
-            pass
-        plt.close()
+def find_next_trade_day(start_date_str: str, trade_cal_df: pd.DataFrame) -> str:
+    current_date = pd.to_datetime(start_date_str, format='%Y%m%d', errors='coerce')
+    if pd.isna(current_date): raise ValueError(f"Invalid start_date_str: {start_date_str}")
+    future_cal = trade_cal_df[trade_cal_df['trade_date_dt'] >= current_date].sort_values('trade_date_dt')
+    for _, row in future_cal.iterrows():
+        if row['is_open'] == 1: return row['trade_date']
+    raise ValueError(f"Could not find a trade day from {start_date_str}")
 
 
-def generate_initial_signals(df_merged: pd.DataFrame, mode: int) -> pd.Series:
-    if 'predicted_action_from_model' not in df_merged.columns:
-        if 'predicted_action' in df_merged.columns:
-            df_merged.rename(columns={'predicted_action': 'predicted_action_from_model'}, inplace=True)
+def find_latest_trading_day_on_or_before(date_dt: datetime, trade_cal_df: pd.DataFrame) -> Optional[datetime]:
+    filtered_cal = trade_cal_df[
+        (trade_cal_df['trade_date_dt'] <= date_dt) & (trade_cal_df['is_open'] == 1)].sort_values('trade_date_dt',
+                                                                                                 ascending=False)
+    return filtered_cal['trade_date_dt'].iloc[0] if not filtered_cal.empty else None
+
+
+def create_data_dirs_if_not_exists(sector_name: str, stock_name: str) -> Tuple[str, str]:
+    train_stock_dir = os.path.join(BASE_DATA_DIR, TRAIN_SUBDIR, sector_name, stock_name)
+    predict_stock_dir = os.path.join(BASE_DATA_DIR, PREDICT_SUBDIR, sector_name, stock_name)
+    os.makedirs(train_stock_dir, exist_ok=True)
+    os.makedirs(predict_stock_dir, exist_ok=True)
+    return train_stock_dir, predict_stock_dir
+
+
+def get_security_info_from_name(security_name_with_suffix: str, all_securities_basic_df: pd.DataFrame,
+                                target_category: Optional[str] = None) -> Tuple[
+    Optional[str], Optional[str], Optional[str], Optional[str]]:
+    base_name, exchange_preference = security_name_with_suffix, None
+    match = re.search(r'\((沪基|深基)\)', security_name_with_suffix)
+    if match:
+        base_name = re.sub(r'\s*\(.*\)\s*$', '', security_name_with_suffix).strip()
+        exchange_preference = '.SH' if match.group(1) == '沪基' else '.SZ'
+    df_to_search = all_securities_basic_df.copy()
+    if target_category:
+        target_type = {"指数": "index", "基金(场内)": "fund"}.get(target_category)
+        if target_type:
+            df_to_search = df_to_search[df_to_search['type'] == target_type]
         else:
-            raise KeyError(
-                f"'predicted_action' 或 'predicted_action_from_model' 列缺失。现有列: {list(df_merged.columns)}")
-
-    if mode == 1:
-        return df_merged['predicted_action_from_model']
-    elif mode == 2:
-        if 'predicted_close' not in df_merged.columns:
-            raise KeyError(f"模式2需要'predicted_close'列。现有列: {list(df_merged.columns)}")
-        actions = pd.Series(1, index=df_merged.index, dtype=int)
-        df_s = df_merged.sort_values('date')
-        prev_close = df_s['predicted_close'].shift(1)
-        actions[df_s['predicted_close'] > prev_close * (1 + STRATEGY_PARAMS["PREDICTED_UP_THRESHOLD"])] = 2
-        actions[df_s['predicted_close'] < prev_close * (1 - STRATEGY_PARAMS["PREDICTED_DOWN_THRESHOLD"])] = 0
-        actions[prev_close.isna()] = 1
-        return actions.reindex(df_merged.index)
-    raise ValueError(f"无效模式: {mode}")
+            df_to_search = df_to_search[df_to_search['type'] == 'stock']
+    result = df_to_search[df_to_search['name'].str.contains(base_name, case=False, na=False)]
+    if not result.empty:
+        if exchange_preference and len(result) > 1:
+            preferred_result = result[result['ts_code'].str.endswith(exchange_preference)]
+            if not preferred_result.empty: result = preferred_result
+        exact_match = result[result['name'] == base_name]
+        first_result = exact_match.iloc[0] if not exact_match.empty else result.iloc[0]
+        return first_result['ts_code'], first_result['type'], first_result['industry'], security_name_with_suffix
+    return None, None, None, security_name_with_suffix
 
 
-# --- 新增：超强鲁棒性的日期解析函数 ---
-def robust_parse_dates(df, col_name='date'):
-    if col_name not in df.columns:
-        # 尝试查找常见变体
-        for alt in ['trade_date', 'TradeDate', 'Date', 'Unnamed: 0']:
-            if alt in df.columns:
-                df.rename(columns={alt: col_name}, inplace=True)
-                break
-        else:
-            return df  # 没有找到日期列，直接返回，后续会报错
+# --- 技术指标计算、数据清洗和预处理函数 ---
+def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
+    # 这个函数现在只负责计算，不负责格式化
+    if df_input.empty or len(df_input) < 30:
+        return df_input
 
-    # 1. 强制转为字符串
-    df[col_name] = df[col_name].astype(str)
+    df = df_input.copy().sort_values('date').reset_index(drop=True)
 
-    # 2. 清洗数据：去除 .0 (浮点数后缀) 和 时间部分 (00:00:00)
-    df[col_name] = df[col_name].apply(lambda x: x.split('.')[0])  # 20230101.0 -> 20230101
-    df[col_name] = df[col_name].apply(lambda x: x.split(' ')[0])  # 2023-01-01 15:00 -> 2023-01-01
+    required_ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    for col in required_ohlcv_cols:
+        if col not in df.columns:
+            return df_input
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # 3. 移除常见分隔符
-    df[col_name] = df[col_name].str.replace('-', '').str.replace('/', '')
+    df.dropna(subset=required_ohlcv_cols, inplace=True)
+    if df.empty:
+        return df_input
 
-    # 4. 转换为datetime
-    df[col_name] = pd.to_datetime(df[col_name], format='%Y%m%d', errors='coerce')
+    if 'pctChg' not in df.columns or df['pctChg'].isnull().any():
+        df['pctChg'] = (df['close'].pct_change()) * 100
+        # 修复：fillna({'col': val}) 是安全的，但为了代码一致性，此处保持原样或改为赋值
+        df.fillna({'pctChg': 0}, inplace=True)
 
-    return df
-
-
-# ==============================================================================
-# --- 主处理函数 (核心回测逻辑) ---
-# ==============================================================================
-def run_backtest_for_strategy(task_info):
-    original_signal_filepath, signal_gen_mode = task_info['filepath'], task_info['mode']
-    ts_code = task_info.get('ts_code', 'N/A')
+    op, hi, lo, cl, vo = (df[c].astype(float) for c in ['open', 'high', 'low', 'close', 'volume'])
 
     try:
-        relative_path = os.path.relpath(original_signal_filepath, ORIGINAL_SIGNALS_BASE_DIR)
-        path_parts = relative_path.replace('\\', '/').split('/')
-        if len(path_parts) < 3:
-            return None
-        sector_name, stock_name, original_filename = path_parts[0], path_parts[1], path_parts[2]
+        df['ma_5'] = talib.MA(cl, 5)
+        df['ma_10'] = talib.MA(cl, 10)
+        df['ma_20'] = talib.MA(cl, 20)
+        df['ma_30'] = talib.MA(cl, 30)
+        df['ma_60'] = talib.MA(cl, 60)
 
-        try:
-            gen_idx_str = original_filename.split('_')[0].replace('G', '')
-            generator_index = int(gen_idx_str)
-        except (ValueError, IndexError):
-            return None
+        df['sma_5'] = talib.SMA(cl, 5)
+        df['sma_10'] = talib.SMA(cl, 10)
+        df['sma_20'] = talib.SMA(cl, 20)
+        df['sma_30'] = talib.SMA(cl, 30)
+        df['sma_60'] = talib.SMA(cl, 60)
 
-        print(f"正在处理 {stock_name}({ts_code}) G{generator_index} (模式 {signal_gen_mode})...")
+        df['ema_5'] = talib.EMA(cl, 5)
+        df['ema_10'] = talib.EMA(cl, 10)
+        df['ema_20'] = talib.EMA(cl, 20)
+        df['ema_30'] = talib.EMA(cl, 30)
+        df['ema_60'] = talib.EMA(cl, 60)
 
-        raw_data_pattern = os.path.join(RAW_DATA_BASE_DIR, sector_name, stock_name, "*.csv")
-        raw_data_files = glob.glob(raw_data_pattern)
-        if not raw_data_files:
-            print(f"[错误] 未找到原始行情数据: {raw_data_pattern}")
-            return None
-
-        # 读取数据
-        df_raw = pd.read_csv(raw_data_files[0])
-        df_signals = pd.read_csv(original_signal_filepath)
-
-        # --- 使用鲁棒的日期解析 ---
-        df_raw = robust_parse_dates(df_raw, 'date')
-        df_signals = robust_parse_dates(df_signals, 'date')
-
-        # 检查解析是否成功
-        if df_signals['date'].isna().all():
-            print(f"[失败] 信号文件日期解析失败 (All NaT): {original_signal_filepath}")
-            # 打印前几行看看原始数据是什么样
-            temp_df = pd.read_csv(original_signal_filepath, nrows=3)
-            print(f"  Head of CSV:\n{temp_df}")
-            return None
-
-        if 'predicted_action' in df_signals.columns:
-            df_signals.rename(columns={'predicted_action': 'predicted_action_from_model'}, inplace=True)
-
-        # 合并数据 (Inner Join会自动处理日期交集，比如 2012-2025 和 2012-20250630 的交集)
-        df_merged = pd.merge(df_raw, df_signals, on='date', how='inner').sort_values('date').set_index('date')
-
-        if df_merged.empty:
-            print(f"[失败] 数据合并后为空。请检查日期范围是否重叠。")
-            print(f"  Raw dates: {df_raw['date'].min()} ~ {df_raw['date'].max()} ({len(df_raw)} rows)")
-            print(f"  Sig dates: {df_signals['date'].min()} ~ {df_signals['date'].max()} ({len(df_signals)} rows)")
-            return None
-
-        df_merged['predicted_action'] = generate_initial_signals(df_merged.reset_index(), signal_gen_mode).values
-
-        df_merged['open_T+1'] = df_merged['open'].shift(-1)
-        df_merged['open_prev1'] = df_merged['open'].shift(1)
-        df_merged['close_prev1'] = df_merged['close'].shift(1)
-        df_merged['pctChg_prev1'] = df_merged['pctChg'].shift(1)
-        df_merged['volume_prev1'] = df_merged['volume'].shift(1)
-
-        trades_log = []
-        daily_actions_log = []
-        current_position = None
-        shares_bought, total_buy_cost = 0, 0.0
-        one_word_board_ban_end_date = pd.NaT
-        loss_ban_end_date = pd.NaT
-
-        daily_equity = 1.0
-        equity_curve_points = []
-        if not df_merged.empty:
-            equity_curve_points.append((df_merged.index[0], 1.0))
-
-        trading_dates = df_merged.index
-
-        for date_T, row_T in df_merged.iterrows():
-            pred_for_Tplus1 = row_T['predicted_action']
-            action_to_take = None
-
-            current_loc = trading_dates.get_loc(date_T)
-            is_not_last_day = current_loc + 1 < len(trading_dates)
-            next_trade_date = trading_dates[current_loc + 1] if is_not_last_day else pd.NaT
-
-            # 一字板逻辑
-            is_dm1_one_word_board_spike = False
-            if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"] or STRATEGY_CONFIG.get("ONE_WORD_BOARD_SPIKE_NO_BUY", False):
-                open_d_m1, close_d_m1, pct_d_m1, vol_d_m1 = row_T.get('open_prev1'), row_T.get(
-                    'close_prev1'), row_T.get('pctChg_prev1'), row_T.get('volume_prev1')
-                if all(pd.notna(x) for x in [open_d_m1, close_d_m1, pct_d_m1, vol_d_m1, row_T['volume']]):
-                    is_dm1_one_word_board = (
-                            pct_d_m1 >= STRATEGY_PARAMS["ONE_WORD_BOARD_PCT_CHG_THRESHOLD"] and
-                            abs(open_d_m1 - close_d_m1) / open_d_m1 < STRATEGY_PARAMS[
-                                "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE"]
-                    )
-                    is_vol_spike = (
-                            vol_d_m1 > 0 and
-                            row_T['volume'] >= vol_d_m1 * STRATEGY_PARAMS["ONE_WORD_BOARD_VOLUME_MULTIPLIER"]
-                    )
-                    if is_dm1_one_word_board and is_vol_spike:
-                        is_dm1_one_word_board_spike = True
-
-            if current_position == 'long':
-                if STRATEGY_CONFIG["ONE_WORD_BOARD_SELL"] and is_dm1_one_word_board_spike:
-                    action_to_take = 'Sell_One_Word'
-
-                if action_to_take is None:
-                    is_hold_filtered = False
-                    if STRATEGY_CONFIG["LIMIT_UP_NO_SELL"] and row_T['pctChg'] >= STRATEGY_PARAMS["LIMIT_UP_THRESHOLD"]:
-                        is_hold_filtered = True
-
-                    if not is_hold_filtered and pred_for_Tplus1 == 0:
-                        action_to_take = 'Sell'
-
-            elif current_position is None:
-                can_buy = (pred_for_Tplus1 == 2)
-
-                if can_buy and pd.notna(
-                    next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_buy = False
-                if can_buy and STRATEGY_CONFIG["DAILY_DROP_LIMIT"] and row_T['pctChg'] <= STRATEGY_PARAMS[
-                    "DAILY_DROP_LIMIT"]: can_buy = False
-
-                if can_buy and STRATEGY_CONFIG.get("ONE_WORD_BOARD_NO_BUY", False):
-                    is_today_one_word_board = False
-                    if row_T['open'] > 0 and row_T['close'] > 0 and row_T['volume'] > 0:
-                        is_today_one_word_board = (
-                                row_T['pctChg'] >= STRATEGY_PARAMS["ONE_WORD_BOARD_PCT_CHG_THRESHOLD"] and
-                                abs(row_T['open'] - row_T['close']) / row_T['open'] < STRATEGY_PARAMS[
-                                    "ONE_WORD_BOARD_PRICE_DIFF_TOLERANCE"]
-                        )
-                    if is_today_one_word_board:
-                        can_buy = False
-
-                if can_buy and STRATEGY_CONFIG.get("ONE_WORD_BOARD_SPIKE_NO_BUY",
-                                                   False) and is_dm1_one_word_board_spike:
-                    can_buy = False
-                    if pd.notna(next_trade_date):
-                        ban_days = STRATEGY_PARAMS.get("ONE_WORD_BOARD_SPIKE_BAN_DAYS", 10)
-                        one_word_board_ban_end_date = next_trade_date + timedelta(days=ban_days)
-
-                if can_buy and STRATEGY_CONFIG.get("LOSS_BAN", False) and pd.notna(
-                        next_trade_date) and next_trade_date < loss_ban_end_date:
-                    can_buy = False
-
-                if can_buy and STRATEGY_CONFIG.get("MA_TREND", False):
-                    short_ma_period = STRATEGY_PARAMS["SHORT_MA_PERIOD_FOR_TREND"]
-                    long_ma_period = STRATEGY_PARAMS["LONG_MA_PERIOD_FOR_TREND"]
-                    short_ma_col = f'sma_{short_ma_period}'
-                    long_ma_col = f'sma_{long_ma_period}'
-                    if short_ma_col in row_T and long_ma_col in row_T:
-                        short_ma_val = row_T[short_ma_col]
-                        long_ma_val = row_T[long_ma_col]
-                        if pd.isna(short_ma_val) or pd.isna(long_ma_val) or short_ma_val <= long_ma_val:
-                            can_buy = False
-                    else:
-                        can_buy = False
-
-                if can_buy and STRATEGY_CONFIG.get("ADX_CHECK", False):
-                    adx_col = f'adx_{14}'
-                    if adx_col in row_T:
-                        adx_val = row_T[adx_col]
-                        if pd.isna(adx_val) or adx_val < STRATEGY_PARAMS["ADX_BUY_THRESHOLD"]:
-                            can_buy = False
-                    else:
-                        can_buy = False
-
-                if can_buy:
-                    action_to_take = "Buy"
-
-            filtered_action_str = "Hold Long" if current_position == 'long' else "Hold Cash"
-            if action_to_take == 'Buy': filtered_action_str = 'Buy'
-            if action_to_take in ['Sell', 'Sell_One_Word']: filtered_action_str = 'Sell'
-
-            daily_actions_log.append(
-                {'date': date_T, 'predicted_action': pred_for_Tplus1, 'filtered_action': filtered_action_str})
-
-            if is_not_last_day:
-                if action_to_take in ["Sell_One_Word", "Sell"]:
-                    sell_price = row_T['open_T+1']
-                    if pd.notna(sell_price) and sell_price > 0 and current_position == 'long':
-                        sell_value = shares_bought * sell_price;
-                        sell_fee = max(sell_value * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)
-                        net_proceeds = sell_value - sell_fee
-                        trade_return = (net_proceeds - total_buy_cost) / total_buy_cost if total_buy_cost > 0 else 0.0
-                        trades_log.append({'exit_date': next_trade_date, 'return': trade_return})
-                        current_position = None
-
-                        if action_to_take == "Sell_One_Word":
-                            ban_days = STRATEGY_PARAMS.get("ONE_WORD_BOARD_SPIKE_BAN_DAYS", 10)
-                            one_word_board_ban_end_date = next_trade_date + timedelta(days=ban_days)
-
-                        if STRATEGY_CONFIG.get("LOSS_BAN", False) and trade_return < 0:
-                            loss_ban_end_date = next_trade_date + timedelta(days=STRATEGY_PARAMS["LOSS_BAN_DAYS"])
-
-                        daily_equity *= (1 + trade_return)
-                        equity_curve_points.append((next_trade_date, daily_equity))
-
-                elif action_to_take == "Buy":
-                    buy_price = row_T['open_T+1']
-                    if pd.notna(buy_price) and buy_price > 0 and current_position is None:
-                        can_execute_buy = True
-                        if pd.notna(
-                            next_trade_date) and next_trade_date < one_word_board_ban_end_date: can_execute_buy = False
-                        if pd.notna(next_trade_date) and next_trade_date < loss_ban_end_date: can_execute_buy = False
-
-                        if can_execute_buy and (daily_equity * INITIAL_CAPITAL) > (
-                                buy_price * 100 + max(buy_price * 100 * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)):
-                            shares_to_buy = math.floor((daily_equity * INITIAL_CAPITAL) / buy_price / 100) * 100
-                            if shares_to_buy > 0:
-                                buy_value = shares_to_buy * buy_price;
-                                buy_fee = max(buy_value * TRANSACTION_FEE_RATE, MIN_TRANSACTION_FEE)
-                                current_position = 'long'
-                                total_buy_cost, shares_bought = buy_value + buy_fee, shares_to_buy
-
-        if not equity_curve_points:
-            daily_equity_curve = pd.Series(1.0, index=df_merged.index)
-        else:
-            equity_series = pd.Series([val for date, val in equity_curve_points],
-                                      index=[date for date, val in equity_curve_points])
-            daily_equity_curve = equity_series.reindex(df_merged.index, method='ffill')
-            if not daily_equity_curve.empty and pd.isna(daily_equity_curve.iloc[0]): daily_equity_curve.iloc[0] = 1.0
-            daily_equity_curve = daily_equity_curve.ffill()
-
-        df_trades = pd.DataFrame(trades_log)
-        num_trades = len(df_trades)
-        if num_trades == 0:
-            metrics = {'num_trades': 0, 'cumulative_return_percentage': 0.0, 'avg_return_per_trade_percentage': 0.0,
-                       'win_rate_percentage': 0.0, 'profit_loss_ratio': np.nan,
-                       'max_single_trade_drawdown_percentage': 0.0}
-        else:
-            win_rate = (df_trades['return'] > 0).sum() / num_trades * 100
-            avg_return = df_trades['return'].mean() * 100
-            total_profit = df_trades[df_trades['return'] > 0]['return'].sum()
-            total_loss = abs(df_trades[df_trades['return'] < 0]['return'].sum())
-            profit_loss_ratio = total_profit / total_loss if total_loss > 0 else np.inf
-            cumulative_return = (daily_equity_curve.iloc[-1] - daily_equity_curve.iloc[
-                0]) if not daily_equity_curve.empty else 0.0
-            cumulative_return_pct = cumulative_return / daily_equity_curve.iloc[
-                0] * 100 if not daily_equity_curve.empty and daily_equity_curve.iloc[0] != 0 else 0.0
-
-            losing_returns = df_trades[df_trades['return'] < 0]['return']
-            max_single_trade_drawdown_pct = 0.0
-            if not losing_returns.empty:
-                max_single_trade_drawdown_pct = losing_returns.min() * 100
-
-            metrics = {'num_trades': num_trades, 'cumulative_return_percentage': cumulative_return_pct,
-                       'avg_return_per_trade_percentage': avg_return, 'win_rate_percentage': win_rate,
-                       'profit_loss_ratio': profit_loss_ratio,
-                       'max_single_trade_drawdown_percentage': max_single_trade_drawdown_pct}
-
-        output_dir = os.path.join(FILTERED_OUTPUT_BASE_DIR, sector_name, stock_name)
-        os.makedirs(output_dir, exist_ok=True)
-
-        new_signal_filename = f'G{generator_index}_mode{signal_gen_mode}_daily_signals.csv'
-        new_metrics_filename = f'G{generator_index}_mode{signal_gen_mode}_metrics.csv'
-
-        df_filtered_signals = pd.DataFrame(daily_actions_log)
-        if not df_trades.empty:
-            df_trades_for_merge = df_trades[['exit_date', 'return']].rename(
-                columns={'exit_date': 'date', 'return': 'trade_return_pct'})
-            df_trades_for_merge['trade_return_pct'] *= 100
-            df_filtered_signals = pd.merge(df_filtered_signals, df_trades_for_merge, on='date', how='left')
-
-        df_filtered_signals['date'] = df_filtered_signals['date'].dt.strftime('%Y%m%d')
-        df_filtered_signals.to_csv(os.path.join(output_dir, new_signal_filename), index=False, float_format='%.2f')
-        pd.DataFrame([metrics]).to_csv(os.path.join(output_dir, new_metrics_filename), index=False, float_format='%.4f')
-
-        stock_info_for_plot = {'ts_code': ts_code, 'stock_name': stock_name, 'generator_index': generator_index,
-                               'mode': signal_gen_mode}
-        plot_trade_analysis(df_trades, daily_equity_curve, stock_info_for_plot, output_dir)
-
-        return {'ts_code': ts_code, 'stock_name': stock_name, 'sector': sector_name, 'generator_index': generator_index,
-                'mode': signal_gen_mode, **metrics}
+        return df
 
     except Exception as e:
-        sys.stderr.write(f"\n[异常] 处理 {stock_name} G{generator_index} 模式 {signal_gen_mode} 时出错:\n")
-        traceback.print_exc(file=sys.stderr)
-        return None
+        print(f"  -> 技术指标计算时发生错误: {e}")
+        traceback.print_exc()
+        return df_input
 
 
-# ==============================================================================
-# --- 主执行 ---
-# ==============================================================================
-if __name__ == '__main__':
+def robust_clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty: return pd.DataFrame()
+    df_cleaned = df.copy()
+    if 'date' in df_cleaned.columns:
+        df_cleaned['date'] = pd.to_datetime(df_cleaned['date'], format='%Y%m%d', errors='coerce').dt.strftime('%Y%m%d')
+        df_cleaned.dropna(subset=['date'], inplace=True)
+    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'pctChg', 'turn']
+    for col in numeric_cols:
+        if col in df_cleaned.columns:
+            df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
+    return df_cleaned.sort_values(by='date').reset_index(drop=True)
+
+
+def preprocess_raw_df(df_raw_daily: pd.DataFrame, df_raw_basic: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    if df_raw_daily is None or df_raw_daily.empty: return pd.DataFrame()
+    df_daily = df_raw_daily.rename(columns={'vol': 'volume', 'trade_date': 'date', 'pct_chg': 'pctChg'})
+    daily_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+    if 'pctChg' in df_daily.columns: daily_cols.append('pctChg')
+    df_daily = df_daily[[c for c in daily_cols if c in df_daily.columns]].copy()
+    df_merged = df_daily
+    if df_raw_basic is not None and not df_raw_basic.empty:
+        df_basic = df_raw_basic.rename(columns={'trade_date': 'date', 'turnover_rate': 'turn'})
+        basic_cols = ['date', 'turn']
+        if any(c in df_basic.columns for c in basic_cols):
+            df_merged = pd.merge(df_daily, df_basic[[c for c in basic_cols if c in df_basic.columns]], on='date',
+                                 how='left')
+    if 'turn' not in df_merged.columns:
+        print(f"  -> 警告: 缺少 'turn' (换手率) 列。将添加值为0的占位符列以统一特征维度。")
+        df_merged['turn'] = 0.0
+    if 'date' in df_merged.columns:
+        df_merged['date'] = df_merged['date'].astype(str)
+    return df_merged
+
+
+# --- 主数据处理函数 ---
+def fetch_and_process_stock_data(ts_code: str, security_type: str, category_name: str, security_name: str,
+                                 fetch_start_date: str, predict_end_date_str: str, user_train_end_date_str: str,
+                                 global_trade_cal_df: pd.DataFrame, pro_instance) -> bool:
+    try:
+        train_dir, pred_dir = create_data_dirs_if_not_exists(category_name, security_name)
+        train_fp = os.path.join(train_dir,
+                                f"{ts_code.replace('.', '_')}_{category_name}_{security_name}_train_data.csv")
+        pred_fp = os.path.join(pred_dir,
+                               f"{ts_code.replace('.', '_')}_{category_name}_{security_name}_predict_data.csv")
+
+        target_end_dt = pd.to_datetime(predict_end_date_str, format='%Y%m%d')
+        df_existing = pd.DataFrame()
+
+        if os.path.exists(pred_fp):
+            try:
+                df_existing = pd.read_csv(pred_fp, dtype={'date': str})
+                latest_trade_day = find_latest_trading_day_on_or_before(target_end_dt, global_trade_cal_df)
+                if latest_trade_day and not df_existing.empty and pd.to_datetime(
+                        df_existing['date'].max()) >= latest_trade_day:
+                    print(f"证券 {security_name} ({ts_code}): 数据已是最新，跳过获取。")
+                    return True
+            except (pd.errors.EmptyDataError, KeyError):
+                df_existing = pd.DataFrame()
+
+        if not df_existing.empty:
+            overlap_days = 60
+            last_date_in_file = pd.to_datetime(df_existing['date'].max())
+            start_fetch_date = (last_date_in_file - timedelta(days=overlap_days)).strftime('%Y%m%d')
+        else:
+            start_fetch_date = TRAIN_DATA_FETCH_START_DATE
+
+        df_new_segment_raw = pd.DataFrame()
+        if pd.to_datetime(start_fetch_date) <= target_end_dt:
+            actual_start = find_next_trade_day(start_fetch_date, global_trade_cal_df)
+            if pd.to_datetime(actual_start) <= target_end_dt:
+                print(
+                    f"证券 {security_name} ({ts_code}): 正在获取从 {actual_start} 到 {predict_end_date_str} 的 {security_type} 数据...")
+                api_map = {'stock': (pro_instance.daily, pro_instance.daily_basic),
+                           'index': (pro_instance.index_daily, None), 'fund': (pro_instance.fund_daily, None)}
+                daily_api, basic_api = api_map[security_type]
+                df_raw_daily = daily_api(ts_code=ts_code, start_date=actual_start, end_date=predict_end_date_str)
+                df_raw_basic = basic_api(ts_code=ts_code, start_date=actual_start,
+                                         end_date=predict_end_date_str) if basic_api else None
+                time.sleep(0.25)
+                df_new_segment_raw = preprocess_raw_df(df_raw_daily, df_raw_basic)
+
+        if not df_new_segment_raw.empty:
+            df_combined_raw = pd.concat([df_existing, df_new_segment_raw]).drop_duplicates(subset=['date'],
+                                                                                           keep='last').sort_values(
+                'date').reset_index(drop=True)
+        else:
+            df_combined_raw = df_existing
+
+        if df_combined_raw.empty:
+            print(f"  -> 警告: 证券 {security_name} 无有效数据，跳过。")
+            return False
+
+        df_to_process = df_combined_raw.copy()
+        if security_type == 'stock' and USE_ADJUSTED_DATA:
+            print(f"  -> 正在为 {ts_code} 单独获取复权因子并进行前复权...")
+            stock_adj_factor_df = pro_instance.adj_factor(ts_code=ts_code, start_date=TRAIN_DATA_FETCH_START_DATE,
+                                                          end_date=predict_end_date_str)
+            if stock_adj_factor_df is not None and not stock_adj_factor_df.empty:
+                base_adj_series = stock_adj_factor_df[stock_adj_factor_df['trade_date'] <= user_train_end_date_str]
+                if not base_adj_series.empty:
+                    base_adj = base_adj_series.sort_values('trade_date', ascending=False).iloc[0]['adj_factor']
+                    df_to_process['trade_date_dt'] = pd.to_datetime(df_to_process['date'], format='%Y%m%d');
+                    stock_adj_factor_df['trade_date_dt'] = pd.to_datetime(stock_adj_factor_df['trade_date'],
+                                                                          format='%Y%m%d')
+                    df_with_adj = pd.merge(df_to_process, stock_adj_factor_df[['trade_date_dt', 'adj_factor']],
+                                           on='trade_date_dt', how='left').sort_values('trade_date_dt')
+
+                    # --- 修复部分 开始 ---
+                    # 替换原先的 fillna(method=..., inplace=True)
+                    df_with_adj['adj_factor'] = df_with_adj['adj_factor'].bfill()
+                    df_with_adj['adj_factor'] = df_with_adj['adj_factor'].ffill()
+                    # --- 修复部分 结束 ---
+
+                    for col in ['open', 'high', 'low', 'close']:
+                        adjusted_price = pd.to_numeric(df_with_adj[col], errors='coerce') * pd.to_numeric(
+                            df_with_adj['adj_factor'], errors='coerce') / base_adj
+                        df_with_adj[col] = adjusted_price
+
+                    df_with_adj['pctChg'] = (df_with_adj['close'] / df_with_adj['close'].shift(1) - 1) * 100
+                    df_to_process = df_with_adj.drop(columns=['trade_date_dt', 'adj_factor'])
+
+        df_cleaned = robust_clean_dataframe(df_to_process)
+        if df_cleaned.empty: return False
+
+        print(f"  -> 正在为 {security_name} 计算技术指标...")
+        df_final = calculate_technical_indicators(df_cleaned)
+
+        if len(df_final) > INDICATOR_WARMUP_PERIOD:
+            df_final = df_final.iloc[INDICATOR_WARMUP_PERIOD:].reset_index(drop=True)
+
+        df_final.dropna(axis=1, how='all', inplace=True)
+
+        # --- 修复部分 ---
+        # 替换 df_final.ffill(inplace=True)
+        df_final = df_final.ffill()
+
+        if df_final.empty:
+            print(f"  -> 警告: 证券 {security_name} 处理后数据为空，跳过。")
+            return False
+
+        # --- 对不同列应用不同的小数位数 ---
+        print("  -> 正在格式化数据列的小数位数...")
+        cols_to_round_2 = ['open', 'high', 'low', 'close'] + [col for col in df_final.columns if 'ma' in col]
+        cols_to_round_4 = ['pctChg', 'turn']
+
+        for col in cols_to_round_2:
+            if col in df_final.columns:
+                df_final[col] = df_final[col].round(2)
+
+        for col in cols_to_round_4:
+            if col in df_final.columns:
+                df_final[col] = df_final[col].round(4)
+
+        x_scaler_path = os.path.join(pred_dir, 'x_scaler.gz')
+        y_scaler_path = os.path.join(pred_dir, 'y_scaler.gz')
+
+        if not os.path.exists(x_scaler_path) or not os.path.exists(y_scaler_path):
+            print(f"  -> 首次运行，正在为 {security_name} 创建并保存数据归一化 scaler...");
+            df_train_for_scaler = df_final[
+                pd.to_datetime(df_final['date']) <= pd.to_datetime(user_train_end_date_str)].copy()
+            if df_train_for_scaler.empty:
+                print(f"  -> 警告: {security_name} 没有足够的训练数据来拟合 scaler，跳过。")
+                return False
+
+            target_column = 'close'
+            feature_columns = [col for col in df_train_for_scaler.columns if col not in ['date', 'direction']]
+            print(f"  -> 用于创建 x_scaler 的特征列: {feature_columns}")
+
+            x_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_scaler = MinMaxScaler(feature_range=(0, 1))
+
+            x_scaler.fit(df_train_for_scaler[feature_columns].values)
+            y_scaler.fit(df_train_for_scaler[[target_column]].values)
+
+            joblib.dump(x_scaler, x_scaler_path)
+            joblib.dump(y_scaler, y_scaler_path)
+            print(f"  -> Scaler 已成功保存至: {pred_dir}")
+
+        if 'direction' in df_final.columns:
+            df_final = df_final.drop(columns=['direction'])
+
+        df_final.to_csv(pred_fp, index=False, na_rep='')
+        print(f"  -> 完整预测数据已更新并保存: {pred_fp} ({len(df_final)} 条)")
+
+        if not df_final.empty:
+            with open(pred_fp.replace('.csv', '.meta'), 'w') as f:
+                json.dump({"last_date": df_final['date'].max()}, f)
+
+        df_train = df_final[pd.to_datetime(df_final['date']) <= pd.to_datetime(user_train_end_date_str)].copy()
+        df_train.to_csv(train_fp, index=False, na_rep='')
+        print(f"  -> 训练数据已更新并保存: {train_fp} ({len(df_train)} 条)")
+
+        return True
+    except Exception as e:
+        print(f"证券 {security_name} ({ts_code}): 处理失败 - {e}");
+        traceback.print_exc();
+        return False
+
+
+# --- 工作进程函数（无修改）---
+def _worker_fetch_data(security_item: dict, global_trade_cal_df: pd.DataFrame, all_securities_basic_df: pd.DataFrame,
+                       predict_end_date_str: str) -> dict:
+    pro_instance = get_tushare_pro_instance()
+    name_with_suffix, category = security_item['name'], security_item['sector']
+    ts_code, sec_type, industry, full_name = get_security_info_from_name(name_with_suffix, all_securities_basic_df,
+                                                                         target_category=category)
+    if not ts_code:
+        return {'name': full_name, 'ts_code': 'N/A', 'category': category, 'status': 'skipped_no_ts_code'}
+    dir_category = industry if industry and pd.notna(industry) else category
+    success = fetch_and_process_stock_data(ts_code, sec_type, dir_category, full_name, TRAIN_DATA_FETCH_START_DATE,
+                                           predict_end_date_str, USER_TRAIN_END_DATE, global_trade_cal_df, pro_instance)
+    return {'name': full_name, 'ts_code': ts_code, 'category': category, 'status': 'success' if success else 'failed'}
+
+
+if __name__ == "__main__":
     multiprocessing.freeze_support()
-    print(FONT_SETUP_MESSAGE)
-
-    parser = argparse.ArgumentParser(description="自动测试所有模型的所有信号模式，并识别最佳策略。")
-    parser.add_argument('--num_cores', type=int, default=multiprocessing.cpu_count(), help=f"并行核心数。")
+    parser = argparse.ArgumentParser(description="并行获取和处理股票、指数、基金数据。")
+    parser.add_argument('--num_cores', type=int, default=min(32, multiprocessing.cpu_count()), help=f"指定并行核心数。")
     args = parser.parse_args()
+    end_date_str = datetime.now().strftime('%Y%m%d') if str(PREDICT_DATA_USER_END_DATE).lower() == 'latest' else str(
+        PREDICT_DATA_USER_END_DATE)
+    print("正在获取所有证券基础信息...")
+    try:
+        stock_df = pro.stock_basic(exchange='', list_status='L', fields='ts_code,name,industry');
+        stock_df['type'] = 'stock'
+        markets = ['CSI', 'SSE', 'SZSE', 'CICC', 'SW', 'MSCI', 'OTH'];
+        index_dfs = [pro.index_basic(market=m, fields='ts_code,name') for m in markets]
+        index_df = pd.concat(index_dfs, ignore_index=True).drop_duplicates(subset=['ts_code']);
+        index_df['type'] = 'index';
+        index_df['industry'] = '指数'
+        fund_df = pro.fund_basic(market='E', fields='ts_code,name');
+        fund_df['type'] = 'fund';
+        fund_df['industry'] = '基金'
+        all_securities_basic = pd.concat(
+            [stock_df[['ts_code', 'name', 'industry', 'type']], index_df[['ts_code', 'name', 'industry', 'type']],
+             fund_df[['ts_code', 'name', 'industry', 'type']]], ignore_index=True)
+        if all_securities_basic.empty: print("错误: 未能获取任何证券基础信息。"); sys.exit(1)
+    except Exception as e:
+        print(f"错误: 获取证券基础信息失败: {e}");
+        sys.exit(1)
+    print("正在加载交易日历...")
+    try:
+        cal_end = (datetime.strptime(end_date_str, '%Y%m%d') + timedelta(days=365)).strftime('%Y%m%d')
+        GLOBAL_TRADE_CAL_DF = pro.trade_cal(exchange='SSE', start_date=TRAIN_DATA_FETCH_START_DATE, end_date=cal_end)
+        GLOBAL_TRADE_CAL_DF.rename(columns={'cal_date': 'trade_date'}, inplace=True)
+        GLOBAL_TRADE_CAL_DF['trade_date_dt'] = pd.to_datetime(GLOBAL_TRADE_CAL_DF['trade_date'])
+        GLOBAL_TRADE_CAL_DF['is_open'] = pd.to_numeric(GLOBAL_TRADE_CAL_DF['is_open'])
+    except Exception as e:
+        print(f"错误: 获取交易日历失败: {e}");
+        sys.exit(1)
+    securities_to_process = [{'name': name, 'sector': cat} for cat, names in stock_info_dict.items() for name in names]
 
-    print("=" * 50 + "\n阶段 1: 扫描并生成所有待处理的回测任务\n" + "=" * 50)
-    tasks = []
-    signal_files = glob.glob(os.path.join(ORIGINAL_SIGNALS_BASE_DIR, '**', '*_daily_signals.csv'), recursive=True)
-    if not signal_files:
-        print(f"未找到任何原始信号文件: {os.path.join(ORIGINAL_SIGNALS_BASE_DIR, '**', '*_daily_signals.csv')}")
-        sys.exit(0)
-    for filepath in signal_files:
-        try:
-            norm_path = os.path.normpath(filepath)
-            path_parts = norm_path.split(os.sep)
-            if len(path_parts) >= 4:
-                stock_name = path_parts[-2]
-                sector_name = path_parts[-3]
-                raw_data_dir = os.path.join(RAW_DATA_BASE_DIR, sector_name, stock_name)
-                predict_files = glob.glob(os.path.join(raw_data_dir, '*_predict_data.csv'))
-                if predict_files:
-                    raw_csv_name = os.path.basename(predict_files[0])
-                    ts_code_parts = raw_csv_name.split('_')
-                    ts_code = f"{ts_code_parts[0]}.{ts_code_parts[1]}"
-                    for mode in [1, 2]: tasks.append({'filepath': filepath, 'ts_code': ts_code, 'mode': mode})
-        except(FileNotFoundError, IndexError):
-            continue
-    print(f"找到 {len(tasks)} 个策略-模式组合待回测。")
+    num_cores = min(args.num_cores, len(securities_to_process))
+    print(f"\n--- 开始并行处理 {len(securities_to_process)} 支证券, 使用 {num_cores} 个进程 ---")
+    tasks = [(item, GLOBAL_TRADE_CAL_DF, all_securities_basic, end_date_str) for item in securities_to_process]
 
-    print("=" * 50 + "\n阶段 2: 开始并行回测所有策略\n" + "=" * 50)
-    if not tasks: sys.exit(0)
-    num_cores = min(args.num_cores, len(tasks))
     with multiprocessing.Pool(processes=num_cores) as pool:
-        results = list(pool.map(run_backtest_for_strategy, tasks))
-    successful_results = [r for r in results if r is not None]
-    print(f"回测完成。成功数: {len(successful_results)}, 失败数: {len(tasks) - len(successful_results)}")
-
-    print("=" * 50 + "\n阶段 3: 开始识别每支股票的最佳策略\n" + "=" * 50)
-    if not successful_results:
-        print("没有任何成功的回测结果，无法识别最佳策略。")
-    else:
-        df_results = pd.DataFrame(successful_results)
-        unique_stocks = df_results.drop_duplicates(subset=['ts_code'])
-        for _, stock_info in unique_stocks.iterrows():
-            ts_code, sector, stock_name = stock_info['ts_code'], stock_info['sector'], stock_info['stock_name']
-            print(f"--- 识别 {stock_name} ({ts_code}) 的最佳策略 ---")
-            stock_metrics = df_results[df_results['ts_code'] == ts_code].to_dict('records')
-            if not stock_metrics: continue
-
-
-            def calculate_score(metric):
-                if metric.get('num_trades', 0) <= 10: return -float('inf')
-                cum_ret = metric.get('cumulative_return_percentage', 0) / 100.0;
-                win_rate = metric.get('win_rate_percentage', 0) / 100.0
-                pl_ratio = metric.get('profit_loss_ratio', 0.0)
-                max_dd_magnitude = abs(metric.get('max_single_trade_drawdown_percentage', 0.0)) / 100.0
-
-                if cum_ret < 0: return -float('inf')
-                log_pl = np.log1p(pl_ratio) if pl_ratio != float('inf') and pl_ratio is not None else np.log(1000)
-
-                score = cum_ret * (win_rate ** 1.5) * log_pl * np.log1p(metric['num_trades'])
-
-                if max_dd_magnitude > 0:
-                    score = score / (1 + max_dd_magnitude * 5)
-
-                return score if np.isfinite(score) else -float('inf')
-
-
-            scored_metrics = sorted([m for m in stock_metrics if m.get('num_trades', 0) > 10], key=calculate_score,
-                                    reverse=True)
-            if scored_metrics and calculate_score(scored_metrics[0]) > -float('inf'):
-                best_metric = scored_metrics[0]
-            else:
-                best_metric_fallback = None
-                if stock_metrics:
-                    best_metric_fallback = max(stock_metrics, key=lambda x: (
-                        x.get('num_trades', 0), x.get('cumulative_return_percentage', -float('inf'))))
-                best_metric = best_metric_fallback if best_metric_fallback else {'generator_index': 'N/A',
-                                                                                 'mode': 'N/A', 'num_trades': 0,
-                                                                                 'cumulative_return_percentage': 0.0,
-                                                                                 'avg_return_per_trade_percentage': 0.0,
-                                                                                 'win_rate_percentage': 0.0,
-                                                                                 'profit_loss_ratio': np.nan,
-                                                                                 'max_single_trade_drawdown_percentage': 0.0}
-
-            print(
-                f"  -> 最佳策略: G{best_metric['generator_index']} (模式 {best_metric['mode']}) | 交易: {best_metric['num_trades']} | 收益: {best_metric['cumulative_return_percentage']:.2f}% | 均笔收益: {best_metric.get('avg_return_per_trade_percentage', 0):.2f}% | 胜率: {best_metric['win_rate_percentage']:.2f}% | 盈亏比: {best_metric.get('profit_loss_ratio', 0):.2f} | 最大单笔回撤: {best_metric.get('max_single_trade_drawdown_percentage', 0):.2f}%"
-            )
-
-            if best_metric.get('generator_index', 'N/A') != 'N/A':
-                output_dir_stock = os.path.join(FILTERED_OUTPUT_BASE_DIR, sector, stock_name)
-                src_base = f"G{best_metric['generator_index']}_mode{best_metric['mode']}"
-
-                for suffix in ["_daily_signals.csv", "_metrics.csv", "_individual_trades_returns.png",
-                               "_cumulative_return_drawdown.png"]:
-                    src_filename = f"{src_base}{suffix}"
-                    dest_filename = src_filename.replace(src_base, "best")
-
-                    src_path = os.path.join(output_dir_stock, src_filename)
-                    dest_path = os.path.join(output_dir_stock, dest_filename)
-
-                    if os.path.exists(src_path):
-                        try:
-                            shutil.copy2(src_path, dest_path)
-                            print(f"  已复制: {src_filename} -> {dest_filename}")
-                        except Exception as e:
-                            print(f"  复制文件出错: {e}")
-                    else:
-                        if '.csv' in src_path:
-                            print(f"  警告: 源文件未找到，无法复制: {src_path}")
-
-    print("=" * 50 + "\n所有任务完成。\n" + "=" * 50)
+        results = list(pool.starmap(_worker_fetch_data, tasks))
+    success_count = sum(1 for r in results if r['status'] == 'success')
+    failed_list = [f"{r['name']} ({r['ts_code']})" for r in results if r['status'] == 'failed']
+    skipped_list = [r['name'] for r in results if r['status'] == 'skipped_no_ts_code']
+    print("\n--- 证券数据获取与处理完成总结 ---")
+    print(f"总计: {len(results)}, 成功: {success_count}, 失败: {len(failed_list)}, 跳过: {len(skipped_list)}")
+    if failed_list: print(f"  失败列表: {', '.join(failed_list)}")
+    if skipped_list: print(f"  跳过列表 (未找到代码): {', '.join(skipped_list)}")
+    print("脚本执行完毕。")

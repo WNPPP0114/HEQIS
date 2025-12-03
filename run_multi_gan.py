@@ -1,4 +1,4 @@
-# 文件名: run_multi_gan.py (最终版：已移除对save_scalers的调用)
+# 文件名: run_multi_gan.py (修复版：确保 pred 模式下生成信号文件)
 
 import argparse
 import pandas as pd
@@ -87,7 +87,8 @@ def run_experiment_for_stock(args, stock_csv_path):
                     pretrain_epochs=local_args.pretrain_epochs,
                     specific_window_size=ws
                 )
-                print(f"--- window_size={ws} 的 {local_args.pretrainer_type.upper()} 预训练完成。权重已保存至 '{pretrainer_ckpt_path}'。 ---")
+                print(
+                    f"--- window_size={ws} 的 {local_args.pretrainer_type.upper()} 预训练完成。权重已保存至 '{pretrainer_ckpt_path}'。 ---")
 
     full_df_path = stock_csv_path
     full_df = pd.read_csv(full_df_path, usecols=['date'])
@@ -111,7 +112,8 @@ def run_experiment_for_stock(args, stock_csv_path):
             ckpt_path_vis = os.path.join(stock_specific_output_dir, f"{local_args.pretrainer_type}_encoder_ws{ws}.pt")
             if os.path.exists(ckpt_path_vis):
                 visualize_reconstruction(gca, ckpt_path_vis, local_args.pretrainer_type, target_window_size=ws)
-                visualize_encoded_feature_correlation(gca, ckpt_path_vis, local_args.pretrainer_type, target_window_size=ws)
+                visualize_encoded_feature_correlation(gca, ckpt_path_vis, local_args.pretrainer_type,
+                                                      target_window_size=ws)
 
     gca.init_model(local_args.num_classes)
     logger = setup_experiment_logging(stock_specific_output_dir, vars(local_args), f"train_{stock_name}")
@@ -122,8 +124,10 @@ def run_experiment_for_stock(args, stock_csv_path):
         if best_model_state and any(s is not None for s in best_model_state):
             print("\n--- 训练结束，保存相关产物 ---")
             gca.save_models(best_model_state)
-            # gca.save_scalers()  # <-- 已移除
+
+            # 生成信号文件
             gca.generate_and_save_daily_signals(best_model_state, predict_csv_path)
+
             print("\n--- 加载最佳模型以生成预测对比CSV ---")
             for i in range(gca.N):
                 if i < len(best_model_state) and best_model_state[i] is not None:
@@ -135,8 +139,16 @@ def run_experiment_for_stock(args, stock_csv_path):
                     else:
                         print(f"警告: G{i + 1} 生成器未被初始化。")
             gca.save_predictions_to_csv(date_series=date_series)
+
     elif local_args.mode == "pred":
         results = gca.pred(date_series=date_series)
+
+        # --- 修复核心：在预测模式下，显式生成信号文件 ---
+        print("\n--- [预测模式] 正在生成交易信号文件 (*_daily_signals.csv) ---")
+        # pred 模式下，模型已经加载了 checkpoint，直接获取当前状态即可
+        current_model_state = [gen.state_dict() for gen in gca.generators]
+        gca.generate_and_save_daily_signals(current_model_state, predict_csv_path)
+        # ---------------------------------------------
 
     if results:
         master_results_file = os.path.join(args.output_dir, "master_results.csv")

@@ -1,4 +1,4 @@
-# 文件名: experiment_runner.py (已修改为更灵活的配置方式)
+# 文件名: experiment_runner.py (修复版: 自动清理旧数据强制更新 + 警告过滤)
 
 import argparse
 import torch
@@ -10,6 +10,12 @@ import logging
 import run_multi_gan
 import random
 import numpy as np
+import warnings
+import shutil  # 用于删除文件夹
+import glob    # 用于查找文件
+
+# --- 过滤 PyTorch 的 FutureWarnings 以保持日志清爽 ---
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
 
 # ==============================================================================
@@ -33,7 +39,6 @@ def set_seed(seed):
 
 # ==============================================================================
 # --- 实验配置中心 (COMMON_ARGS) ---
-# 这是您进行实验时唯一需要修改的地方。
 # ==============================================================================
 COMMON_ARGS = {
     # --- 基本路径配置 ---
@@ -45,21 +50,15 @@ COMMON_ARGS = {
     "notes": "Default run from COMMON_ARGS",
 
     # ==========================================================================
-    # --- 核心模型数量与类型配置 (★★★ 增删模型在此处修改 ★★★) ---
-    #
-    # 规则:
-    # 1. "N_pairs" 的值必须等于下面三个列表的长度。
-    # 2. "generators", "window_sizes", "use_rope" 三个列表的长度必须严格相等。
-    #
-    # 示例：当前配置为 4 个模型
+    # --- 核心模型数量与类型配置 ---
     # ==========================================================================
     "N_pairs": 3,  # <-- 模型对的数量
 
-    "generators": ["gru", "bilstm", "transformer"],  # <-- 模型名称列表 (长度必须为 N_pairs)
-    "window_sizes": [60, 60, 60],  # <-- 每个模型对应的窗口大小 (长度必须为 N_pairs)
-    "use_rope": [True, True, True],  # <-- 每个模型是否使用旋转位置编码 (长度必须为 N_pairs)
+    "generators": ["gru", "bilstm", "transformer"],  # <-- 模型名称列表
+    "window_sizes": [60, 60, 60],  # <-- 每个模型对应的窗口大小
+    "use_rope": [True, True, True],  # <-- 每个模型是否使用旋转位置编码
 
-    "discriminators": None,  # 保持为 None 即可，代码会自动生成 N_pairs 个 'default' 判别器
+    "discriminators": None,
 
     # --- 训练超参数 ---
     "num_classes": 3,
@@ -76,12 +75,12 @@ COMMON_ARGS = {
     "ckpt_path": "auto",
 
     # --- 损失函数与监控指标配置 ---
-    "adversarial_loss_mode": "bce",  # 可选 'bce', 'mse'
-    "regression_loss_mode": "mse",  # 可选 'mse', 'mae'
-    "monitor_metric": "val_mse",  # 可选 'val_mse', 'val_acc', 'val_bce', 'val_cls_loss'
+    "adversarial_loss_mode": "bce",
+    "regression_loss_mode": "mse",
+    "monitor_metric": "val_mse",
 
     # --- 预训练相关参数 ---
-    "pretrainer_type": "t3vae",  # 可选: 'cae', 't3vae'
+    "pretrainer_type": "t3vae",
     "pretrain": True,
     "pretrain_epochs": 50,
     "lr_cae_finetune_multiplier": 100,
@@ -90,7 +89,6 @@ COMMON_ARGS = {
 
 # ==============================================================================
 # setup_arg_parser 和 validate_args 定义
-# (这些函数已经很灵活，无需修改)
 # ==============================================================================
 def setup_arg_parser():
     parser = argparse.ArgumentParser(
@@ -152,7 +150,7 @@ def validate_args(args):
 
 
 # ==============================================================================
-# main 函数 (无需修改)
+# main 函数
 # ==============================================================================
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s",
@@ -185,6 +183,39 @@ def main():
         stock_name_from_path = path_parts[-2]
         sector_name_from_path = path_parts[-3]
         expected_output_dir = os.path.join(args.output_dir, sector_name_from_path, stock_name_from_path)
+
+        # ==============================================================================
+        # 【新增逻辑】: 预测模式下，强制清理旧结果，确保生成到最新日期
+        # ==============================================================================
+        if args.mode == "pred" and os.path.isdir(expected_output_dir):
+            print(f"--- [预测模式] 正在清理 {stock_name_from_path} 的旧预测结果，以强制更新... ---")
+
+            # 1. 清理 visualization 文件夹 (包含旧的 csv 和 png)
+            vis_dir = os.path.join(expected_output_dir, 'visualization')
+            if os.path.exists(vis_dir):
+                try:
+                    shutil.rmtree(vis_dir)
+                    print(f"    已删除旧 visualization 目录: {vis_dir}")
+                except Exception as e:
+                    print(f"    删除 visualization 失败: {e}")
+
+            # 2. 清理旧的信号文件 (*_daily_signals.csv)
+            old_signals = glob.glob(os.path.join(expected_output_dir, '*_daily_signals.csv'))
+            for f in old_signals:
+                try:
+                    os.remove(f)
+                    print(f"    已删除旧信号文件: {f}")
+                except Exception as e:
+                    print(f"    删除信号文件失败: {e}")
+
+            # 3. 清理 meta 文件
+            meta_files = glob.glob(os.path.join(expected_output_dir, '*.meta'))
+            for f in meta_files:
+                try:
+                    os.remove(f)
+                except:
+                    pass
+        # ==============================================================================
 
         if args.mode == "train" and os.path.isdir(expected_output_dir):
             ckpt_dir_check = os.path.join(expected_output_dir, 'ckpt', 'generators')
