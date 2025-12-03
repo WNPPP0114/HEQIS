@@ -1,4 +1,4 @@
-# get_stock_data.py (最终修复版：修复增量更新 + 对不同列应用不同的小数位数)
+# get_stock_data.py (最终修复版：修复FutureWarning警告)
 
 import tushare as ts
 import pandas as pd
@@ -30,6 +30,7 @@ PREDICT_DATA_USER_END_DATE = '20250715'
 
 stock_info_dict = {
     "培育钻石": ["黄河旋风"],
+    "云计算": ["美利云", "云赛智联"],
 }
 
 # --- Tushare API 初始化 ---
@@ -119,6 +120,7 @@ def calculate_technical_indicators(df_input: pd.DataFrame) -> pd.DataFrame:
 
     if 'pctChg' not in df.columns or df['pctChg'].isnull().any():
         df['pctChg'] = (df['close'].pct_change()) * 100
+        # 修复：fillna({'col': val}) 是安全的，但为了代码一致性，此处保持原样或改为赋值
         df.fillna({'pctChg': 0}, inplace=True)
 
     op, hi, lo, cl, vo = (df[c].astype(float) for c in ['open', 'high', 'low', 'close', 'volume'])
@@ -256,12 +258,17 @@ def fetch_and_process_stock_data(ts_code: str, security_type: str, category_name
                                                                           format='%Y%m%d')
                     df_with_adj = pd.merge(df_to_process, stock_adj_factor_df[['trade_date_dt', 'adj_factor']],
                                            on='trade_date_dt', how='left').sort_values('trade_date_dt')
-                    df_with_adj['adj_factor'].fillna(method='bfill', inplace=True);
-                    df_with_adj['adj_factor'].fillna(method='ffill', inplace=True)
+
+                    # --- 修复部分 开始 ---
+                    # 替换原先的 fillna(method=..., inplace=True)
+                    df_with_adj['adj_factor'] = df_with_adj['adj_factor'].bfill()
+                    df_with_adj['adj_factor'] = df_with_adj['adj_factor'].ffill()
+                    # --- 修复部分 结束 ---
+
                     for col in ['open', 'high', 'low', 'close']:
                         adjusted_price = pd.to_numeric(df_with_adj[col], errors='coerce') * pd.to_numeric(
                             df_with_adj['adj_factor'], errors='coerce') / base_adj
-                        df_with_adj[col] = adjusted_price  # 保留完整精度，稍后统一处理
+                        df_with_adj[col] = adjusted_price
 
                     df_with_adj['pctChg'] = (df_with_adj['close'] / df_with_adj['close'].shift(1) - 1) * 100
                     df_to_process = df_with_adj.drop(columns=['trade_date_dt', 'adj_factor'])
@@ -276,13 +283,16 @@ def fetch_and_process_stock_data(ts_code: str, security_type: str, category_name
             df_final = df_final.iloc[INDICATOR_WARMUP_PERIOD:].reset_index(drop=True)
 
         df_final.dropna(axis=1, how='all', inplace=True)
-        df_final.ffill(inplace=True)
+
+        # --- 修复部分 ---
+        # 替换 df_final.ffill(inplace=True)
+        df_final = df_final.ffill()
 
         if df_final.empty:
             print(f"  -> 警告: 证券 {security_name} 处理后数据为空，跳过。")
             return False
 
-        # --- 核心修改点：在保存前进行统一的、分类别的格式化 ---
+        # --- 对不同列应用不同的小数位数 ---
         print("  -> 正在格式化数据列的小数位数...")
         cols_to_round_2 = ['open', 'high', 'low', 'close'] + [col for col in df_final.columns if 'ma' in col]
         cols_to_round_4 = ['pctChg', 'turn']
@@ -294,7 +304,6 @@ def fetch_and_process_stock_data(ts_code: str, security_type: str, category_name
         for col in cols_to_round_4:
             if col in df_final.columns:
                 df_final[col] = df_final[col].round(4)
-        # --- 修改结束 ---
 
         x_scaler_path = os.path.join(pred_dir, 'x_scaler.gz')
         y_scaler_path = os.path.join(pred_dir, 'y_scaler.gz')
