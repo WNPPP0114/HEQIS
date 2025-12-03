@@ -31,6 +31,7 @@ PREDICT_DATA_USER_END_DATE = '20251201'
 stock_info_dict = {
     "培育钻石": ["黄河旋风"],
     "云计算": ["美利云", "云赛智联"],
+    #.................
 }
 
 # --- Tushare API 初始化 ---
