@@ -3,13 +3,13 @@
 **基于多智能体对抗网络 (Multi-GAN) 的量化交易预测与边缘端部署系统**
 
 ![MAATRUSTED Logo/Banner](docs/images/banner.png)  
-*(建议：这里放一张项目的架构图或 Logo)*
+*(建议：在此处添加项目架构图或 Logo，图片请存放在 docs/images 目录下)*
 
 ## 📖 项目简介
 
 **MAATRUSTED** 是一个集成了数据获取、深度学习建模、策略回测、可视化分析以及嵌入式 NPU 部署的全栈量化交易系统。
 
-本系统利用先进的时序模型（Transformer, BiLSTM, GRU 等）结合 **Multi-GAN（多生成器对抗网络）** 架构，旨在从复杂的股票市场数据中提取有效特征，生成买卖信号，并支持将最优策略模型无缝部署到 **瑞芯微 RK3568** 等边缘计算设备上进行离线推理。
+本系统利用先进的时序模型（BiLSTM, Transformer, GRU 等）结合 **Multi-GAN（多生成器对抗网络）** 架构，旨在从复杂的股票市场数据中提取有效特征，生成买卖信号，并支持将最优策略模型无缝部署到 **瑞芯微 RK3568** 等边缘计算设备上进行离线推理。
 
 ## ✨ 核心特性
 
@@ -27,33 +27,31 @@
 
 ## 🛠️ 环境依赖 (Windows)
 
-本项目在 **Windows 10/11** 环境下开发，推荐使用 Pycharm/Conda 管理环境。
+本项目在 **Windows 10/11** 下开发，使用 **PyCharm** 进行项目管理。
 
 ### 必要版本配置
-*   **Python**: 3.11
+*   **IDE**: PyCharm (推荐)
+*   **Python**: 3.11 (原生解释器)
 *   **CUDA**: 11.8 (配合 cuDNN 8.7)
 *   **PyTorch**: 2.1.2 + cu118
 
 ### ⚡ 快速安装指南
 
-1.  **创建并激活虚拟环境**
-    ```bash
-    conda create -n maatrusted python=3.11
-    conda activate maatrusted
-    ```
+1.  **环境准备**
+    *   确保已安装 Python 3.11。
+    *   在 PyCharm 中打开本项目，并创建一个新的 Virtualenv 环境（基于 Python 3.11）。
 
 2.  **安装 PyTorch (使用清华镜像源)**
+    打开 PyCharm 终端 (Terminal)，运行以下命令安装指定版本的 Torch：
     ```bash
-    pip install torch==2.1.2+cu118 torchvision==0.16.2+cu118 torchaudio==2.1.2+cu118 -f https://download.pytorch.org/whl/torch_stable.html
-    # 或者使用您提供的简化命令：
     pip install torch==2.1.2+cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
     ```
 
 3.  **安装其他依赖**
     ```bash
-    pip install pandas numpy matplotlib seaborn scikit-learn tushare dash plotly joblib onnx onnxruntime tqdm talib
+    pip install pandas numpy matplotlib seaborn scikit-learn tushare dash plotly joblib onnx onnxruntime tqdm talib -i https://pypi.tuna.tsinghua.edu.cn/simple
     ```
-    *(注：TA-Lib 在 Windows 下可能需要下载 `.whl` 文件安装)*
+    *(注：TA-Lib 在 Windows 下可能需要手动下载对应 Python 3.11 的 `.whl` 文件进行安装)*
 
 ---
 
@@ -75,7 +73,7 @@ python get_stock_data.py
 python experiment_runner.py --mode train --num_epochs 100
 ```
 ![训练过程截图](docs/images/training_process.png)
-*(建议：放一张训练时的 Loss 曲线或控制台输出截图)*
+*(此处建议添加训练时的 Loss 曲线或控制台输出截图)*
 
 ### 4. 策略回测与筛选
 训练完成后，运行回测脚本。系统会根据交易规则筛选出表现最好的模型（G1/G2/G3...）。
@@ -92,7 +90,7 @@ python dash_kline_visualizer.py
 访问：`http://127.0.0.1:8050`
 
 ![可视化大屏截图](docs/images/dash_ui.png)
-*(建议：放一张浏览器中 Dash K线图界面的截图，最好能看到买卖点箭头)*
+*(此处建议添加浏览器中 Dash K线图界面的截图)*
 
 ---
 
@@ -101,24 +99,25 @@ python dash_kline_visualizer.py
 本项目支持将最佳策略模型导出并部署到 RK3568 开发板。
 
 ### 步骤 1：Windows 端一键导出
-运行导出脚本，通过交互式菜单选择要导出的股票（支持批量）。
+运行导出脚本，通过交互式菜单选择要导出的股票（支持指令 `all` 批量导出）。
 ```bash
 python deploy_export.py
 ```
 **产出物**：`deploy_output/` 目录，包含 `model_deploy.onnx` (模型) 和 `scaler_params.json` (参数)。
 
-### 步骤 2：模型转换 (Linux/虚拟机)
-使用 `rknn-toolkit2` 将 ONNX 转换为 RKNN 模型（FP16精度）。
+### 步骤 2：模型转换 (Ubuntu 24.04 虚拟机)
+将导出的文件夹传输至虚拟机，使用 `rknn-toolkit2` 将 ONNX 转换为 RKNN 模型（FP16精度）。
+*(注：请确保虚拟机已配置好对应 Python 版本的 RKNN 环境)*
 ```bash
-# 请参考 deploy_convert_batch.py (需自行配置RKNN环境)
+# 请参考 deploy_convert_batch.py
 python deploy_convert_batch.py
 ```
 
 ### 步骤 3：板端推理
-将模型和 JSON 参数上传至 RK3568，运行推理脚本即可实现 NPU 加速预测。
+将转换好的模型和 JSON 参数上传至 RK3568，运行推理脚本即可实现 NPU 加速预测。
 
 ![部署流程图](docs/images/deployment_flow.png)
-*(建议：放一张从 Windows 到 RK3568 的文件流转示意图)*
+*(此处建议添加从 Windows 到 RK3568 的文件流转示意图)*
 
 ---
 
@@ -136,7 +135,7 @@ MAATRUSTED/
 ├── experiment_runner.py     # 训练入口
 ├── filter_trading_signals.py# 回测入口
 ├── dash_kline_visualizer.py # 可视化大屏
-├── deploy_export.py         # 部署导出工具
+├── deploy_export.py         # 部署导出工具 (Batch版)
 └── README.md                # 项目说明
 ```
 
