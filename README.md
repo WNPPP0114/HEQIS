@@ -94,9 +94,9 @@ python dash_kline_visualizer.py
 
 ---
 
-## 💾 边缘端部署 (RK3568)
+## 💾 边缘端部署 (RK35XX)
 
-本项目支持将最佳策略模型导出并部署到 RK3568 开发板。
+本项目支持将最佳策略模型导出并部署到 RK35XX 开发板。
 
 ### 步骤 1：Windows 端一键导出
 运行导出脚本，通过交互式菜单选择要导出的股票（支持指令 `all` 批量导出）。
@@ -114,7 +114,7 @@ python deploy_convert_batch.py
 ```
 
 ### 步骤 3：板端推理
-将转换好的模型和 JSON 参数上传至 RK3568，运行推理脚本即可实现 NPU 加速预测。
+将转换好的模型和 JSON 参数上传至 RK35XX，运行推理脚本即可实现 NPU 加速预测。
 
 ![部署流程图](docs/images/deployment_flow.png)
 *(此处建议添加从 Windows 到 RK3568 的文件流转示意图)*
