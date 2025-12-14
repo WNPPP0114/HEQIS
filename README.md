@@ -105,7 +105,7 @@ python deploy_export.py
 ```
 **产出物**：`deploy_output/` 目录，包含 `model_deploy.onnx` (模型) 和 `scaler_params.json` (参数)。
 
-### 步骤 2：模型转换 (Ubuntu 24.04 虚拟机)
+### 步骤 2：模型转换 (Ubuntu虚拟机)
 将导出的文件夹传输至虚拟机，使用 `rknn-toolkit2` 将 ONNX 转换为 RKNN 模型（FP16精度）。
 *(注：请确保虚拟机已配置好对应 Python 版本的 RKNN 环境)*
 ```bash
