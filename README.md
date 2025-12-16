@@ -6,89 +6,83 @@
 
 ```mermaid
 graph TD
-    %% --- 全局样式定义 ---
+    %% --- 核心配置：强制增加间距 ---
+    %% nodesep: 同层节点间距, ranksep: 上下层间距
+    %% 这一行指令对防遮挡至关重要
+    %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px', 'fontFamily': 'arial'}, 'flowchart': {'nodeSpacing': 50, 'rankSpacing': 50, 'curve': 'basis'}}}%%
+
+    %% --- 样式定义 ---
     classDef cloud fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1;
     classDef gateway fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100;
     classDef compute fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
     classDef app fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
+
+    %% =======================
+    %% 1. 数据源层
+    %% =======================
+    subgraph Cloud ["☁️ Data Source Layer"]
+        direction LR
+        API["&nbsp;Tushare Pro API&nbsp;"]:::cloud
+        CSV["&nbsp;Local CSV History&nbsp;"]:::cloud
+    end
+
+    %% =======================
+    %% 2. 边缘计算节点 (移除外层包裹，直接展示两个节点)
+    %% =======================
     
-    %% 虚线框样式
-    classDef container fill:#FFFFFF,stroke:#90A4AE,stroke-width:2px,stroke-dasharray: 5 5,color:#455A64;
-
-    %% =======================
-    %% 1. 数据源层 (Top)
-    %% =======================
-    subgraph SourceLayer ["☁️ Data Source Layer"]
-        direction LR
-        API["Tushare Pro API"]:::cloud
-        CSV["Local CSV History"]:::cloud
-    end
-
-    %% =======================
-    %% 2. 异构边缘集群 (Middle)
-    %% =======================
-    subgraph EdgeCluster ["⚡ Heterogeneous Edge Cluster (Distributed)"]
+    %% --- RK3568 网关 ---
+    subgraph RK3568 ["🔶 Gateway Node: RK3568 (Producer)"]
         direction TB
+        %% 使用空格强行撑宽节点，防止边框压字
+        Cleaner["&nbsp;&nbsp;Data Cleaner & Normalizer&nbsp;&nbsp;"]:::gateway
+        RKNN["&nbsp;&nbsp;NPU Feature Extractor&nbsp;&nbsp;"]:::gateway
+        ZMQ_Pub["&nbsp;&nbsp;&nbsp;&nbsp;ZeroMQ Publisher (Hub)&nbsp;&nbsp;&nbsp;&nbsp;"]:::gateway
+    end
 
-        %% --- 网关节点 (RK3568) ---
-        %% 使用 <br/> 折行以减小宽度压力
-        subgraph RK3568 ["Gateway Node:<br/>RK3568 (Producer)"]
-            direction TB
-            Cleaner["Data Cleaner & Normalizer"]:::gateway
-            RKNN["NPU Feature Extractor"]:::gateway
-            %% 增加空格以物理撑开宽度
-            ZMQ_Pub["&nbsp;&nbsp;ZeroMQ Publisher (Hub)&nbsp;&nbsp;"]:::gateway
-        end
-
-        %% --- 计算节点 (Jetson) ---
-        %% 使用 <br/> 折行防止标题过长被截断
-        subgraph Jetson ["Compute Node:<br/>Jetson Nano (Consumer)"]
-            direction TB
-            %% 增加 &nbsp; 确保节点比标题宽，彻底解决遮挡问题
-            ZMQ_Sub["&nbsp;&nbsp;&nbsp;ZeroMQ Subscriber&nbsp;&nbsp;&nbsp;"]:::compute
-            Buffer["Ring Buffer / Queue"]:::compute
-            TRT["&nbsp;TensorRT Engine (FP16)&nbsp;"]:::compute
-        end
+    %% --- Jetson 计算节点 ---
+    subgraph Jetson ["🟢 Compute Node: Jetson Nano (Consumer)"]
+        direction TB
+        ZMQ_Sub["&nbsp;&nbsp;&nbsp;&nbsp;ZeroMQ Subscriber&nbsp;&nbsp;&nbsp;&nbsp;"]:::compute
+        Buffer["&nbsp;&nbsp;Ring Buffer / Queue&nbsp;&nbsp;"]:::compute
+        TRT["&nbsp;&nbsp;TensorRT Engine (FP16)&nbsp;&nbsp;"]:::compute
     end
 
     %% =======================
-    %% 3. 应用层 (Bottom)
+    %% 3. 应用层
     %% =======================
-    subgraph AppLayer ["📊 Application Layer"]
+    subgraph App ["📊 Application Layer"]
         direction LR
-        Strategy["Strategy Executor"]:::app
-        Dash["Dash Visualization UI"]:::app
+        Strategy["&nbsp;Strategy Executor&nbsp;"]:::app
+        Dash["&nbsp;Dash Visualization UI&nbsp;"]:::app
     end
 
     %% =======================
     %% 连线逻辑
     %% =======================
     
-    %% 数据流向
+    %% 数据源 -> 清洗
     API --> Cleaner
     CSV --> Cleaner
     
+    %% RK3568 内部
     Cleaner --> RKNN
     RKNN --> ZMQ_Pub
     
-    %% 跨节点通信 (加粗线条)
-    ZMQ_Pub ==>|"TCP/IP Stream (Async)"| ZMQ_Sub
+    %% 跨设备通信 (RK -> Jetson)
+    %% 使用加粗直线
+    ZMQ_Pub ==>|TCP/IP Stream| ZMQ_Sub
     
-    %% Jetson 内部处理
+    %% Jetson 内部
     ZMQ_Sub --> Buffer
     Buffer --> TRT
     
-    %% 反馈回路 (使用右侧曲线连接，避免穿插)
-    TRT -.->|"Signal Feedback"| ZMQ_Pub
+    %% 反馈回路 (关键优化：曲线路径)
+    %% 这里的 linkStyle 只是辅助，主要靠布局引擎自动计算
+    TRT -.->|Signal Feedback| ZMQ_Pub
     
     %% 输出到应用
     ZMQ_Pub --> Strategy
     Strategy --> Dash
-
-    %% =======================
-    %% 容器样式
-    %% =======================
-    class EdgeCluster container
 ```
 
 ## 📖 项目简介 (Introduction)
