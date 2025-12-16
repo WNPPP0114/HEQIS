@@ -3,6 +3,9 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
+![HEQIS Architecture Banner](docs/images/banner.png)
+*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
+
 ```mermaid
 graph TD
     %% --- Styles ---
@@ -13,8 +16,8 @@ graph TD
 
     %% --- Cloud Layer ---
     subgraph Cloud ["☁️ Data Source Layer"]
-        API[Tushare Pro API]:::cloud
-        CSV[Local CSV History]:::cloud
+        API["Tushare Pro API"]:::cloud
+        CSV["Local CSV History"]:::cloud
     end
 
     %% --- Edge Cluster ---
@@ -23,16 +26,16 @@ graph TD
         
         %% Node 1: RK3568
         subgraph RK3568 ["Gateway Node: RK3568 (Producer)"]
-            Cleaner[Data Cleaner & Normalizer]:::gateway
-            RKNN[NPU Feature Extractor]:::gateway
-            ZMQ_Pub[ZeroMQ Publisher]:::gateway
+            Cleaner["Data Cleaner & Normalizer"]:::gateway
+            RKNN["NPU Feature Extractor"]:::gateway
+            ZMQ_Pub["ZeroMQ Publisher"]:::gateway
         end
 
         %% Node 2: Jetson
         subgraph Jetson ["Compute Node: Jetson Nano (Consumer)"]
-            ZMQ_Sub[ZeroMQ Subscriber]:::compute
-            Buffer[Ring Buffer / Queue]:::compute
-            TRT[TensorRT Engine (FP16)]:::compute
+            ZMQ_Sub["ZeroMQ Subscriber"]:::compute
+            Buffer["Ring Buffer / Queue"]:::compute
+            TRT["TensorRT Engine (FP16)"]:::compute
         end
 
         %% Inter-node Communication
@@ -42,8 +45,8 @@ graph TD
 
     %% --- User Layer ---
     subgraph App ["📊 Application Layer"]
-        Dash[Dash Visualization UI]:::ui
-        Strategy[Strategy Executor]:::ui
+        Dash["Dash Visualization UI"]:::ui
+        Strategy["Strategy Executor"]:::ui
     end
 
     %% --- Connections ---
