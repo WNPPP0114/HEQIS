@@ -3,8 +3,43 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-![HEQIS Architecture Banner](docs/images/banner.png)
-*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
+```mermaid
+graph LR
+    %% 定义样式
+    classDef hardware fill:#f9f9f9,stroke:#333,stroke-width:2px,rx:10,ry:10;
+    classDef soft fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,rx:5,ry:5;
+    classDef highlight fill:#fff3e0,stroke:#ff9800,stroke-width:2px,rx:5,ry:5;
+
+    %% 外部数据源
+    DataSource((☁️ Tushare/API)):::highlight
+
+    %% RK3568 网关节点
+    subgraph Gateway [⚡ Node 1: RK3568 Gateway]
+        direction TB
+        DataClean[🧹 Data Cleaning<br/>(CPU)]:::soft
+        NPU[🧠 Feature Extractor<br/>(RKNN / NPU)]:::soft
+        Dashboard[📊 Dash UI<br/>(Visualization)]:::highlight
+    end
+
+    %% Jetson 计算节点
+    subgraph Compute [🚀 Node 2: Jetson Nano]
+        direction TB
+        TRT[🔥 Multi-GAN Inference<br/>(TensorRT / GPU)]:::soft
+        RoPE[🔄 RoPE Encoding<br/>(CUDA)]:::soft
+    end
+
+    %% 连接关系
+    DataSource ==>|Raw Data| DataClean
+    DataClean --> NPU
+    
+    %% 跨设备通信
+    NPU == "ZeroMQ (PUSH) ⏩<br/>Tensor Stream" ==> TRT
+    TRT --> RoPE
+    RoPE == "ZeroMQ (PUB) ⏪<br/>Trading Signals" ==> Dashboard
+
+    %% 点击交互链接 (可选)
+    click Gateway "https://github.com/WNPPP0114/HEQIS" "RK3568 Node"
+    click Compute "https://github.com/WNPPP0114/HEQIS" "Jetson Node"
 
 ## 📖 项目简介 (Introduction)
 
