@@ -3,72 +3,57 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
+```mermaid
 graph TD
-    %% ==========================================
-    %% 样式定义
-    %% ==========================================
-    classDef cluster fill:#f5f7fa,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
-    classDef device fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-    classDef component fill:#ffffff,stroke:#455a64,stroke-width:1px;
-    classDef hardware fill:#ffecb3,stroke:#ff6f00,stroke-width:2px;
+    %% --- Styles ---
+    classDef cloud fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef gateway fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+    classDef compute fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef ui fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
 
-    %% ==========================================
-    %% 架构流程
-    %% ==========================================
-    
-    subgraph Cloud [☁️ Cloud / Data Source]
-        API[Tushare API / Sensors]:::component
+    %% --- Cloud Layer ---
+    subgraph Cloud ["☁️ Data Source Layer"]
+        API[Tushare Pro API]:::cloud
+        CSV[Local CSV History]:::cloud
     end
 
-    subgraph Edge_Cluster [⚡ Heterogeneous Edge Cluster (双机异构集群)]
-        style Edge_Cluster fill:#fff,stroke:#333,stroke-width:2px
+    %% --- Edge Cluster ---
+    subgraph Cluster ["⚡ Heterogeneous Edge Cluster (Distributed)"]
+        direction TB
         
-        %% --------------------------------------
-        %% 节点 A: RK3568
-        %% --------------------------------------
-        subgraph RK3568 [Node A: RK3568 (Gateway)]
-            class RK3568 device
-            
-            RingBuf[🔄 Ring Buffer (C++)]:::component
-            PreProc[Data Cleaning / Normalization]:::component
-            NPU[🧩 NPU: Feature Extraction (RKNN)]:::hardware
-            ZMQ_Prod[📤 ZeroMQ Producer (PUSH)]:::component
-            
-            RingBuf --> PreProc
-            PreProc --> NPU
-            NPU --> ZMQ_Prod
+        %% Node 1: RK3568
+        subgraph RK3568 ["Gateway Node: RK3568 (Producer)"]
+            Cleaner[Data Cleaner & Normalizer]:::gateway
+            RKNN[NPU Feature Extractor]:::gateway
+            ZMQ_Pub[ZeroMQ Publisher]:::gateway
         end
 
-        %% --------------------------------------
-        %% 节点 B: Jetson
-        %% --------------------------------------
-        subgraph Jetson [Node B: Jetson Nano (Compute)]
-            class Jetson device
-            
-            ZMQ_Cons[📥 ZeroMQ Consumer (PULL)]:::component
-            Pipeline[⚙️ Async Pipeline]:::component
-            TRT[🚀 GPU: TensorRT Engine (FP16)]:::hardware
-            ZMQ_Pub[📡 Signal Publisher (PUB)]:::component
-            
-            ZMQ_Cons --> Pipeline
-            Pipeline --> TRT
-            TRT --> ZMQ_Pub
+        %% Node 2: Jetson
+        subgraph Jetson ["Compute Node: Jetson Nano (Consumer)"]
+            ZMQ_Sub[ZeroMQ Subscriber]:::compute
+            Buffer[Ring Buffer / Queue]:::compute
+            TRT[TensorRT Engine (FP16)]:::compute
         end
+
+        %% Inter-node Communication
+        ZMQ_Pub == "TCP/IP Stream (Async)" ==> ZMQ_Sub
+        TRT -.->|Signal Feedback| ZMQ_Pub
     end
 
-    subgraph User_UI [📊 User Interface]
-        Dash[🖥️ Dash Visualization Dashboard]:::component
+    %% --- User Layer ---
+    subgraph App ["📊 Application Layer"]
+        Dash[Dash Visualization UI]:::ui
+        Strategy[Strategy Executor]:::ui
     end
 
-    %% ==========================================
-    %% 连线关系
-    %% ==========================================
-    API ==>|Raw Data| RingBuf
-    
-    ZMQ_Prod == "TCP/IP Stream (Low Latency)" ==> ZMQ_Cons
-    
-    ZMQ_Pub == "Trading Signals" ==> Dash
-    ZMQ_Pub -.->|Feedback| RK3568
+    %% --- Connections ---
+    API --> Cleaner
+    CSV --> Cleaner
+    Cleaner --> RKNN
+    RKNN --> ZMQ_Pub
+    ZMQ_Sub --> Buffer --> TRT
+    ZMQ_Pub --> Dash
+```
 
 ## 📖 项目简介 (Introduction)
 
@@ -100,20 +85,8 @@ graph TD
 
 ---
 
-## 🛠️ 硬件拓扑与环境 (Topology)
+## 🛠️ 开发环境依赖 (Environment)
 
-### 硬件架构
-```mermaid
-graph LR
-    A[数据源/传感器] -->|UART/API| B(RK3568 Gateway)
-    B -->|NPU Pre-process| B
-    B -->|ZeroMQ/TCP Stream| C(Jetson Compute Node)
-    C -->|TensorRT Inference| C
-    C -->|Signal Publish| B
-    B -->|Web Visualization| D[用户大屏]
-```
-
-### 开发环境依赖
 *   **Host (训练端)**: Windows 10/11 + NVIDIA GPU (RTX 3060+)
     *   Python 3.11, PyTorch 2.1.2+cu118
 *   **Edge Node 1 (RK3568)**: Ubuntu 20.04 / Buildroot
