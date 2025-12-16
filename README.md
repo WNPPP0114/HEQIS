@@ -3,8 +3,57 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-![HEQIS Architecture Banner](docs/images/banner.png)
-*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
+```mermaid
+graph TD
+    %% 定义节点样式
+    classDef cluster fill:#f5f5f5,stroke:#333,stroke-width:2px;
+    classDef node fill:#e1f5fe,stroke:#0277bd,stroke-width:1px;
+    classDef edge fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,stroke-dasharray: 5 5;
+
+    %% 外部输入
+    Input[☁️ Market Data Source / Tushare API]
+
+    %% RK3568 网关节点
+    subgraph Gateway_Node [📍 RK3568 Gateway Node]
+        direction TB
+        Cleaner[🧹 Data Cleaning & Normalization]
+        NPU_Feat[⚡ NPU Inference (RKNN)<br/>Feature Extraction]
+        RingBuf[🔄 Ring Buffer (Async Queue)]
+        ZMQ_Push[📡 ZeroMQ Producer (PUSH)]
+    end
+
+    %% Jetson 计算节点
+    subgraph Compute_Node [🚀 Jetson Compute Node]
+        direction TB
+        ZMQ_Pull[📥 ZeroMQ Consumer (PULL)]
+        TRT_Eng[🔥 TensorRT Engine (FP16)<br/>Multi-GAN / Transformer]
+        Signal[🧠 Strategy & Signal Gen]
+    end
+
+    %% UI层
+    UI[📊 Dash Visualization & Monitor]
+
+    %% 连线逻辑
+    Input ==> Cleaner
+    Cleaner --> NPU_Feat
+    NPU_Feat --> RingBuf
+    RingBuf --> ZMQ_Push
+
+    %% 跨设备通信
+    ZMQ_Push == TCP Low Latency Stream ==> ZMQ_Pull
+
+    %% 计算节点流程
+    ZMQ_Pull --> TRT_Eng
+    TRT_Eng --> Signal
+
+    %% 结果回传
+    Signal -.->|Feedback / Result| UI
+
+    %% 样式应用
+    class Gateway_Node,Compute_Node cluster;
+    class Cleaner,NPU_Feat,RingBuf,ZMQ_Push,ZMQ_Pull,TRT_Eng,Signal node;
+    class Input,UI edge;
+```
 
 ## 📖 项目简介 (Introduction)
 
