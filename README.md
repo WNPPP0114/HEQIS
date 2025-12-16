@@ -3,16 +3,14 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-![HEQIS Architecture Banner](docs/images/banner.png)
-*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
 
 ```mermaid
 graph TD
-    %% --- Styles ---
-    classDef cloud fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
-    classDef gateway fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
-    classDef compute fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef ui fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+    %% --- Styles (High Contrast) ---
+    classDef cloud fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1;
+    classDef gateway fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100;
+    classDef compute fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
+    classDef ui fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
 
     %% --- Cloud Layer ---
     subgraph Cloud ["☁️ Data Source Layer"]
