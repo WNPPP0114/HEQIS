@@ -11,27 +11,27 @@ graph TD
     classDef edge fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,stroke-dasharray: 5 5;
 
     %% 外部输入
-    Input[☁️ Market Data Source / Tushare API]
+    Input["☁️ Market Data Source / Tushare API"]
 
     %% RK3568 网关节点
     subgraph Gateway_Node [📍 RK3568 Gateway Node]
         direction TB
-        Cleaner[🧹 Data Cleaning & Normalization]
-        NPU_Feat[⚡ NPU Inference (RKNN)<br/>Feature Extraction]
-        RingBuf[🔄 Ring Buffer (Async Queue)]
-        ZMQ_Push[📡 ZeroMQ Producer (PUSH)]
+        Cleaner["🧹 Data Cleaning & Normalization"]
+        NPU_Feat["⚡ NPU Inference (RKNN)<br/>Feature Extraction"]
+        RingBuf["🔄 Ring Buffer (Async Queue)"]
+        ZMQ_Push["📡 ZeroMQ Producer (PUSH)"]
     end
 
     %% Jetson 计算节点
     subgraph Compute_Node [🚀 Jetson Compute Node]
         direction TB
-        ZMQ_Pull[📥 ZeroMQ Consumer (PULL)]
-        TRT_Eng[🔥 TensorRT Engine (FP16)<br/>Multi-GAN / Transformer]
-        Signal[🧠 Strategy & Signal Gen]
+        ZMQ_Pull["📥 ZeroMQ Consumer (PULL)"]
+        TRT_Eng["🔥 TensorRT Engine (FP16)<br/>Multi-GAN / Transformer"]
+        Signal["🧠 Strategy & Signal Gen"]
     end
 
     %% UI层
-    UI[📊 Dash Visualization & Monitor]
+    UI["📊 Dash Visualization & Monitor"]
 
     %% 连线逻辑
     Input ==> Cleaner
