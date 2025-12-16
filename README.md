@@ -3,8 +3,72 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-![HEQIS Architecture Banner](docs/images/banner.png)
-*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
+graph TD
+    %% ==========================================
+    %% 样式定义
+    %% ==========================================
+    classDef cluster fill:#f5f7fa,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef device fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef component fill:#ffffff,stroke:#455a64,stroke-width:1px;
+    classDef hardware fill:#ffecb3,stroke:#ff6f00,stroke-width:2px;
+
+    %% ==========================================
+    %% 架构流程
+    %% ==========================================
+    
+    subgraph Cloud [☁️ Cloud / Data Source]
+        API[Tushare API / Sensors]:::component
+    end
+
+    subgraph Edge_Cluster [⚡ Heterogeneous Edge Cluster (双机异构集群)]
+        style Edge_Cluster fill:#fff,stroke:#333,stroke-width:2px
+        
+        %% --------------------------------------
+        %% 节点 A: RK3568
+        %% --------------------------------------
+        subgraph RK3568 [Node A: RK3568 (Gateway)]
+            class RK3568 device
+            
+            RingBuf[🔄 Ring Buffer (C++)]:::component
+            PreProc[Data Cleaning / Normalization]:::component
+            NPU[🧩 NPU: Feature Extraction (RKNN)]:::hardware
+            ZMQ_Prod[📤 ZeroMQ Producer (PUSH)]:::component
+            
+            RingBuf --> PreProc
+            PreProc --> NPU
+            NPU --> ZMQ_Prod
+        end
+
+        %% --------------------------------------
+        %% 节点 B: Jetson
+        %% --------------------------------------
+        subgraph Jetson [Node B: Jetson Nano (Compute)]
+            class Jetson device
+            
+            ZMQ_Cons[📥 ZeroMQ Consumer (PULL)]:::component
+            Pipeline[⚙️ Async Pipeline]:::component
+            TRT[🚀 GPU: TensorRT Engine (FP16)]:::hardware
+            ZMQ_Pub[📡 Signal Publisher (PUB)]:::component
+            
+            ZMQ_Cons --> Pipeline
+            Pipeline --> TRT
+            TRT --> ZMQ_Pub
+        end
+    end
+
+    subgraph User_UI [📊 User Interface]
+        Dash[🖥️ Dash Visualization Dashboard]:::component
+    end
+
+    %% ==========================================
+    %% 连线关系
+    %% ==========================================
+    API ==>|Raw Data| RingBuf
+    
+    ZMQ_Prod == "TCP/IP Stream (Low Latency)" ==> ZMQ_Cons
+    
+    ZMQ_Pub == "Trading Signals" ==> Dash
+    ZMQ_Pub -.->|Feedback| RK3568
 
 ## 📖 项目简介 (Introduction)
 
