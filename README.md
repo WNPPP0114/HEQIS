@@ -6,54 +6,87 @@
 
 ```mermaid
 graph TD
-    %% --- Styles (High Contrast) ---
+    %% --- 全局样式定义 ---
     classDef cloud fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1;
     classDef gateway fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100;
     classDef compute fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
-    classDef ui fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
+    classDef app fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
+    
+    %% 样式：大虚线框
+    classDef container fill:#FFFFFF,stroke:#90A4AE,stroke-width:2px,stroke-dasharray: 5 5,color:#455A64;
 
-    %% --- Cloud Layer ---
-    subgraph Cloud ["☁️ Data Source Layer"]
+    %% =======================
+    %% 1. 数据源层 (Top)
+    %% =======================
+    subgraph SourceLayer ["☁️ Data Source Layer"]
+        direction LR
         API["Tushare Pro API"]:::cloud
         CSV["Local CSV History"]:::cloud
     end
 
-    %% --- Edge Cluster ---
-    subgraph Cluster ["⚡ Heterogeneous Edge Cluster (Distributed)"]
+    %% =======================
+    %% 2. 异构边缘集群 (Middle)
+    %% =======================
+    subgraph EdgeCluster ["⚡ Heterogeneous Edge Cluster (Distributed)"]
         direction TB
-        
-        %% Node 1: RK3568
+
+        %% --- 网关节点 ---
         subgraph RK3568 ["Gateway Node: RK3568 (Producer)"]
+            direction TB
             Cleaner["Data Cleaner & Normalizer"]:::gateway
             RKNN["NPU Feature Extractor"]:::gateway
-            ZMQ_Pub["ZeroMQ Publisher"]:::gateway
+            ZMQ_Pub["ZeroMQ Publisher (Hub)"]:::gateway
         end
 
-        %% Node 2: Jetson
+        %% --- 计算节点 ---
         subgraph Jetson ["Compute Node: Jetson Nano (Consumer)"]
+            direction TB
             ZMQ_Sub["ZeroMQ Subscriber"]:::compute
             Buffer["Ring Buffer / Queue"]:::compute
             TRT["TensorRT Engine (FP16)"]:::compute
         end
-
-        %% Inter-node Communication
-        ZMQ_Pub == "TCP/IP Stream (Async)" ==> ZMQ_Sub
-        TRT -.->|Signal Feedback| ZMQ_Pub
     end
 
-    %% --- User Layer ---
-    subgraph App ["📊 Application Layer"]
-        Dash["Dash Visualization UI"]:::ui
-        Strategy["Strategy Executor"]:::ui
+    %% =======================
+    %% 3. 应用层 (Bottom)
+    %% =======================
+    subgraph AppLayer ["📊 Application Layer"]
+        direction LR
+        Strategy["Strategy Executor"]:::app
+        Dash["Dash Visualization UI"]:::app
     end
 
-    %% --- Connections ---
+    %% =======================
+    %% 连线逻辑
+    %% =======================
+    
+    %% 1. 数据流入
     API --> Cleaner
     CSV --> Cleaner
+    
+    %% 2. RK3568 内部处理
     Cleaner --> RKNN
     RKNN --> ZMQ_Pub
-    ZMQ_Sub --> Buffer --> TRT
-    ZMQ_Pub --> Dash
+    
+    %% 3. 跨设备通信 (RK -> Jetson)
+    ZMQ_Pub ==>|"TCP/IP Stream (Async)"| ZMQ_Sub
+    
+    %% 4. Jetson 内部处理
+    ZMQ_Sub --> Buffer
+    Buffer --> TRT
+    
+    %% 5. 反馈回路 (Jetson -> RK)
+    %% 使用 linkStyle 调整曲线弧度，使其从右侧回绕
+    TRT -.->|"Signal Feedback"| ZMQ_Pub
+    
+    %% 6. 输出到应用层
+    ZMQ_Pub --> Strategy
+    Strategy --> Dash
+
+    %% =======================
+    %% 容器样式应用
+    %% =======================
+    class EdgeCluster container
 ```
 
 ## 📖 项目简介 (Introduction)
