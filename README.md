@@ -5,33 +5,35 @@
 
 ```mermaid
 graph TD
-    %% 定义节点样式
-    classDef cluster fill:#f5f5f5,stroke:#333,stroke-width:2px;
-    classDef node fill:#e1f5fe,stroke:#0277bd,stroke-width:1px;
-    classDef edge fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,stroke-dasharray: 5 5;
+    %% 全局样式设置
+    classDef default fill:#fff,stroke:#333,stroke-width:1px,color:#000;
+    classDef cluster fill:#fafafa,stroke:#999,stroke-width:2px,rx:5,ry:5;
+    classDef gateway fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1;
+    classDef compute fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
+    classDef external fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,stroke-dasharray: 5 5,color:#e65100;
 
     %% 外部输入
-    Input["☁️ Market Data Source / Tushare API"]
+    Input["☁️ Market Data Source / Tushare API"]:::external
 
     %% RK3568 网关节点
-    subgraph Gateway_Node [📍 RK3568 Gateway Node]
+    subgraph Gateway_Node ["📍 RK3568 Gateway Node"]
         direction TB
-        Cleaner["🧹 Data Cleaning & Normalization"]
-        NPU_Feat["⚡ NPU Inference (RKNN)<br/>Feature Extraction"]
-        RingBuf["🔄 Ring Buffer (Async Queue)"]
-        ZMQ_Push["📡 ZeroMQ Producer (PUSH)"]
+        Cleaner["🧹 Data Cleaning"]:::gateway
+        NPU_Feat["⚡ NPU Inference (RKNN)<br/>Feature Extraction"]:::gateway
+        RingBuf["🔄 Ring Buffer<br/>(Async Queue)"]:::gateway
+        ZMQ_Push["📡 ZeroMQ Producer<br/>(PUSH Mode)"]:::gateway
     end
 
     %% Jetson 计算节点
-    subgraph Compute_Node [🚀 Jetson Compute Node]
+    subgraph Compute_Node ["🚀 Jetson Compute Node"]
         direction TB
-        ZMQ_Pull["📥 ZeroMQ Consumer (PULL)"]
-        TRT_Eng["🔥 TensorRT Engine (FP16)<br/>Multi-GAN / Transformer"]
-        Signal["🧠 Strategy & Signal Gen"]
+        ZMQ_Pull["📥 ZeroMQ Consumer<br/>(PULL Mode)"]:::compute
+        TRT_Eng["🔥 TensorRT Engine (FP16)<br/>Multi-GAN / Transformer"]:::compute
+        Signal["🧠 Strategy Logic<br/>& Signal Gen"]:::compute
     end
 
     %% UI层
-    UI["📊 Dash Visualization & Monitor"]
+    UI["📊 Dash Visualization & Monitor"]:::external
 
     %% 连线逻辑
     Input ==> Cleaner
@@ -40,7 +42,7 @@ graph TD
     RingBuf --> ZMQ_Push
 
     %% 跨设备通信
-    ZMQ_Push == TCP Low Latency Stream ==> ZMQ_Pull
+    ZMQ_Push == "TCP Low Latency Stream" ==> ZMQ_Pull
 
     %% 计算节点流程
     ZMQ_Pull --> TRT_Eng
@@ -49,10 +51,8 @@ graph TD
     %% 结果回传
     Signal -.->|Feedback / Result| UI
 
-    %% 样式应用
+    %% 应用样式
     class Gateway_Node,Compute_Node cluster;
-    class Cleaner,NPU_Feat,RingBuf,ZMQ_Push,ZMQ_Pull,TRT_Eng,Signal node;
-    class Input,UI edge;
 ```
 
 ## 📖 项目简介 (Introduction)
@@ -90,12 +90,21 @@ graph TD
 ### 硬件架构
 ```mermaid
 graph LR
-    A[数据源/传感器] -->|UART/API| B(RK3568 Gateway)
-    B -->|NPU Pre-process| B
-    B -->|ZeroMQ/TCP Stream| C(Jetson Compute Node)
-    C -->|TensorRT Inference| C
-    C -->|Signal Publish| B
-    B -->|Web Visualization| D[用户大屏]
+    %% 节点样式定义
+    classDef dev fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000;
+    classDef ext fill:#e0e0e0,stroke:#616161,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
+
+    A["Data Source<br/>(Sensors/API)"]:::ext
+    B["RK3568 Gateway<br/>(NPU Node)"]:::dev
+    C["Jetson Compute<br/>(GPU Node)"]:::dev
+    D["User Dashboard"]:::ext
+
+    A -->|UART/Ethernet| B
+    B -->|Pre-process| B
+    B ==>|ZeroMQ/TCP| C
+    C -->|Inference| C
+    C ==>|Signal| B
+    B -.->|Web Socket| D
 ```
 
 ### 开发环境依赖
