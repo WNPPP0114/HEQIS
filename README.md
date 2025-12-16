@@ -1,10 +1,61 @@
+markdown
 # HEQIS 🚀
 
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-![HEQIS Architecture Banner](docs/images/banner.png)
-*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
+![HEQIS Logo](docs/images/banner.png)
+
+## 🏗️ 系统架构 (System Architecture)
+
+mermaid
+graph TD
+    %% 定义样式
+    classDef cluster fill:#f9f9f9,stroke:#333,stroke-width:2px;
+    classDef rk fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef jet fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
+    classDef cloud fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+
+    %% 外部数据源
+    Data[📡 实时行情数据<br/>Tushare / TCP Stream]:::cloud
+
+    %% 边缘集群子图
+    subgraph Edge_Cluster [⚡ Heterogeneous Edge Cluster (双机异构集群)]
+        direction TB
+        
+        %% RK3568 节点
+        subgraph Gateway_Node [Gateway Node: RK3568]
+            direction TB
+            Pre[数据清洗 & 归一化<br/>(CPU / NumPy)]:::rk
+            NPU_Infer[轻量特征提取<br/>(NPU / RKNN)]:::rk
+            ZMQ_Push[ZeroMQ PUSH<br/>(Producer)]:::rk
+            Web_UI[Dash 可视化看板<br/>(Web Server)]:::rk
+        end
+
+        %% 通信链路
+        Link_TCP((ZeroMQ<br/>TCP/IP 链路))
+
+        %% Jetson 节点
+        subgraph Compute_Node [Compute Node: Jetson]
+            direction TB
+            ZMQ_Pull[ZeroMQ PULL<br/>(Consumer)]:::jet
+            GPU_Infer[复杂时序推理<br/>(GPU / TensorRT)]:::jet
+            Signal_Gen[交易信号生成<br/>(Post-Process)]:::jet
+        end
+    end
+
+    %% 连接关系
+    Data ==>|Raw Data| Pre
+    Pre --> NPU_Infer
+    NPU_Infer -->|Tensor Data| ZMQ_Push
+    
+    ZMQ_Push ==>|Async Stream| Link_TCP
+    Link_TCP ==>|Low Latency| ZMQ_Pull
+    
+    ZMQ_Pull --> GPU_Infer
+    GPU_Infer --> Signal_Gen
+    Signal_Gen -.->|Buy/Sell Signal| Web_UI
+
 
 ## 📖 项目简介 (Introduction)
 
@@ -36,26 +87,18 @@
 
 ---
 
-## 🛠️ 硬件拓扑与环境 (Topology)
+## 🛠️ 开发环境与依赖 (Environment)
 
-### 硬件架构
-```mermaid
-graph LR
-    A[数据源/传感器] -->|UART/API| B(RK3568 Gateway)
-    B -->|NPU Pre-process| B
-    B -->|ZeroMQ/TCP Stream| C(Jetson Compute Node)
-    C -->|TensorRT Inference| C
-    C -->|Signal Publish| B
-    B -->|Web Visualization| D[用户大屏]
-```
+### Host Workstation (训练端)
+*   **OS**: Windows 10/11
+*   **GPU**: NVIDIA RTX 3060+
+*   **Core Stack**: Python 3.11, PyTorch 2.1.2+cu118
 
-### 开发环境依赖
-*   **Host (训练端)**: Windows 10/11 + NVIDIA GPU (RTX 3060+)
-    *   Python 3.11, PyTorch 2.1.2+cu118
-*   **Edge Node 1 (RK3568)**: Ubuntu 20.04 / Buildroot
-    *   rknn-toolkit2-lite, python-rknnlite
-*   **Edge Node 2 (Jetson)**: JetPack 4.6+ / Ubuntu 18.04
-    *   TensorRT 8.x, PyTorch-GPU, ZeroMQ (`pyzmq`)
+### Edge Cluster (边缘端)
+| Node | Device | OS | Critical Libs | Role |
+| :--- | :--- | :--- | :--- | :--- |
+| **Node A** | **RK3568** | Ubuntu 20.04 | `rknn-toolkit2-lite`, `numpy` | Gateway, Pre-process |
+| **Node B** | **Jetson Nano** | JetPack 4.6 | `TensorRT 8.x`, `pyzmq`, `torch-gpu` | Heavy Inference |
 
 ---
 
@@ -154,3 +197,4 @@ HEQIS/
 ## 🤝 贡献与支持
 
 Welcome PRs! 特别欢迎关于 **CUDA 算子优化**、**RKNN 异构调度** 及 **ZeroMQ 通信效率提升** 的改进建议。
+```
