@@ -12,7 +12,7 @@ graph TD
     classDef compute fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
     classDef app fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
     
-    %% 样式：大虚线框
+    %% 虚线框样式
     classDef container fill:#FFFFFF,stroke:#90A4AE,stroke-width:2px,stroke-dasharray: 5 5,color:#455A64;
 
     %% =======================
@@ -30,20 +30,24 @@ graph TD
     subgraph EdgeCluster ["⚡ Heterogeneous Edge Cluster (Distributed)"]
         direction TB
 
-        %% --- 网关节点 ---
-        subgraph RK3568 ["Gateway Node: RK3568 (Producer)"]
+        %% --- 网关节点 (RK3568) ---
+        %% 使用 <br/> 折行以减小宽度压力
+        subgraph RK3568 ["Gateway Node:<br/>RK3568 (Producer)"]
             direction TB
             Cleaner["Data Cleaner & Normalizer"]:::gateway
             RKNN["NPU Feature Extractor"]:::gateway
-            ZMQ_Pub["ZeroMQ Publisher (Hub)"]:::gateway
+            %% 增加空格以物理撑开宽度
+            ZMQ_Pub["&nbsp;&nbsp;ZeroMQ Publisher (Hub)&nbsp;&nbsp;"]:::gateway
         end
 
-        %% --- 计算节点 ---
-        subgraph Jetson ["Compute Node: Jetson Nano (Consumer)"]
+        %% --- 计算节点 (Jetson) ---
+        %% 使用 <br/> 折行防止标题过长被截断
+        subgraph Jetson ["Compute Node:<br/>Jetson Nano (Consumer)"]
             direction TB
-            ZMQ_Sub["ZeroMQ Subscriber"]:::compute
+            %% 增加 &nbsp; 确保节点比标题宽，彻底解决遮挡问题
+            ZMQ_Sub["&nbsp;&nbsp;&nbsp;ZeroMQ Subscriber&nbsp;&nbsp;&nbsp;"]:::compute
             Buffer["Ring Buffer / Queue"]:::compute
-            TRT["TensorRT Engine (FP16)"]:::compute
+            TRT["&nbsp;TensorRT Engine (FP16)&nbsp;"]:::compute
         end
     end
 
@@ -60,31 +64,29 @@ graph TD
     %% 连线逻辑
     %% =======================
     
-    %% 1. 数据流入
+    %% 数据流向
     API --> Cleaner
     CSV --> Cleaner
     
-    %% 2. RK3568 内部处理
     Cleaner --> RKNN
     RKNN --> ZMQ_Pub
     
-    %% 3. 跨设备通信 (RK -> Jetson)
+    %% 跨节点通信 (加粗线条)
     ZMQ_Pub ==>|"TCP/IP Stream (Async)"| ZMQ_Sub
     
-    %% 4. Jetson 内部处理
+    %% Jetson 内部处理
     ZMQ_Sub --> Buffer
     Buffer --> TRT
     
-    %% 5. 反馈回路 (Jetson -> RK)
-    %% 使用 linkStyle 调整曲线弧度，使其从右侧回绕
+    %% 反馈回路 (使用右侧曲线连接，避免穿插)
     TRT -.->|"Signal Feedback"| ZMQ_Pub
     
-    %% 6. 输出到应用层
+    %% 输出到应用
     ZMQ_Pub --> Strategy
     Strategy --> Dash
 
     %% =======================
-    %% 容器样式应用
+    %% 容器样式
     %% =======================
     class EdgeCluster container
 ```
