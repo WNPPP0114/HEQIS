@@ -3,87 +3,8 @@
 **Heterogeneous Edge Quant Inference System**
 **基于异构边缘集群的高性能量化交易推理系统**
 
-
-```mermaid
-graph TD
-    %% --- 核心配置：强制增加间距 ---
-    %% nodesep: 同层节点间距, ranksep: 上下层间距
-    %% 这一行指令对防遮挡至关重要
-    %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px', 'fontFamily': 'arial'}, 'flowchart': {'nodeSpacing': 50, 'rankSpacing': 50, 'curve': 'basis'}}}%%
-
-    %% --- 样式定义 ---
-    classDef cloud fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1;
-    classDef gateway fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100;
-    classDef compute fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20;
-    classDef app fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C;
-
-    %% =======================
-    %% 1. 数据源层
-    %% =======================
-    subgraph Cloud ["☁️ Data Source Layer"]
-        direction LR
-        API["&nbsp;Tushare Pro API&nbsp;"]:::cloud
-        CSV["&nbsp;Local CSV History&nbsp;"]:::cloud
-    end
-
-    %% =======================
-    %% 2. 边缘计算节点 (移除外层包裹，直接展示两个节点)
-    %% =======================
-    
-    %% --- RK3568 网关 ---
-    subgraph RK3568 ["🔶 Gateway Node: RK3568 (Producer)"]
-        direction TB
-        %% 使用空格强行撑宽节点，防止边框压字
-        Cleaner["&nbsp;&nbsp;Data Cleaner & Normalizer&nbsp;&nbsp;"]:::gateway
-        RKNN["&nbsp;&nbsp;NPU Feature Extractor&nbsp;&nbsp;"]:::gateway
-        ZMQ_Pub["&nbsp;&nbsp;&nbsp;&nbsp;ZeroMQ Publisher (Hub)&nbsp;&nbsp;&nbsp;&nbsp;"]:::gateway
-    end
-
-    %% --- Jetson 计算节点 ---
-    subgraph Jetson ["🟢 Compute Node: Jetson Nano (Consumer)"]
-        direction TB
-        ZMQ_Sub["&nbsp;&nbsp;&nbsp;&nbsp;ZeroMQ Subscriber&nbsp;&nbsp;&nbsp;&nbsp;"]:::compute
-        Buffer["&nbsp;&nbsp;Ring Buffer / Queue&nbsp;&nbsp;"]:::compute
-        TRT["&nbsp;&nbsp;TensorRT Engine (FP16)&nbsp;&nbsp;"]:::compute
-    end
-
-    %% =======================
-    %% 3. 应用层
-    %% =======================
-    subgraph App ["📊 Application Layer"]
-        direction LR
-        Strategy["&nbsp;Strategy Executor&nbsp;"]:::app
-        Dash["&nbsp;Dash Visualization UI&nbsp;"]:::app
-    end
-
-    %% =======================
-    %% 连线逻辑
-    %% =======================
-    
-    %% 数据源 -> 清洗
-    API --> Cleaner
-    CSV --> Cleaner
-    
-    %% RK3568 内部
-    Cleaner --> RKNN
-    RKNN --> ZMQ_Pub
-    
-    %% 跨设备通信 (RK -> Jetson)
-    %% 使用加粗直线
-    ZMQ_Pub ==>|TCP/IP Stream| ZMQ_Sub
-    
-    %% Jetson 内部
-    ZMQ_Sub --> Buffer
-    Buffer --> TRT
-    
-    %% 反馈回路 (关键优化：曲线路径)
-    %% 这里的 linkStyle 只是辅助，主要靠布局引擎自动计算
-    TRT -.->|Signal Feedback| ZMQ_Pub
-    
-    %% 输出到应用
-    ZMQ_Pub --> Strategy
-    Strategy --> Dash
-```
+![HEQIS Architecture Banner](docs/images/banner.png)
+*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
 
 ## 📖 项目简介 (Introduction)
 
@@ -115,8 +36,20 @@ graph TD
 
 ---
 
-## 🛠️ 开发环境依赖 (Environment)
+## 🛠️ 硬件拓扑与环境 (Topology)
 
+### 硬件架构
+```mermaid
+graph LR
+    A[数据源/传感器] -->|UART/API| B(RK3568 Gateway)
+    B -->|NPU Pre-process| B
+    B -->|ZeroMQ/TCP Stream| C(Jetson Compute Node)
+    C -->|TensorRT Inference| C
+    C -->|Signal Publish| B
+    B -->|Web Visualization| D[用户大屏]
+```
+
+### 开发环境依赖
 *   **Host (训练端)**: Windows 10/11 + NVIDIA GPU (RTX 3060+)
     *   Python 3.11, PyTorch 2.1.2+cu118
 *   **Edge Node 1 (RK3568)**: Ubuntu 20.04 / Buildroot
