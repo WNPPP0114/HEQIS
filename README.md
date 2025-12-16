@@ -1,151 +1,156 @@
-# MAATRUSTED 🚀
+# HEQIS 🚀
 
-**基于多智能体对抗网络 (Multi-GAN) 的量化交易预测与边缘端部署系统**
+**Heterogeneous Edge Quant Inference System**
+**基于异构边缘集群的高性能量化交易推理系统**
 
-![MAATRUSTED Logo/Banner](docs/images/banner.png)  
-*(建议：在此处添加项目架构图或 Logo，图片请存放在 docs/images 目录下)*
+![HEQIS Architecture Banner](docs/images/banner.png)
+*(建议：在此处添加异构集群架构图，展示 RK3568 与 Jetson 的数据流向)*
 
-## 📖 项目简介
+## 📖 项目简介 (Introduction)
 
-**MAATRUSTED** 是一个集成了数据获取、深度学习建模、策略回测、可视化分析以及嵌入式 NPU 部署的全栈量化交易系统。
+**HEQIS** (Heterogeneous Edge Quant Inference System) 是一个面向下一代边缘计算场景的分布式量化推理系统。
 
-本系统利用先进的时序模型（BiLSTM, Transformer, GRU 等）结合 **Multi-GAN（多生成器对抗网络）** 架构，旨在从复杂的股票市场数据中提取有效特征，生成买卖信号，并支持将最优策略模型无缝部署到 **瑞芯微 RK3568** 等边缘计算设备上进行离线推理。
+本项目旨在解决复杂深度学习模型（Multi-GAN, Transformer）在资源受限边缘设备上难以实时部署的痛点。通过构建 **RK3568 (Gateway/NPU) + Jetson Nano (Compute/GPU)** 的双机异构集群，HEQIS 实现了算力的分级调度与极致优化。
 
-## ✨ 核心特性
+系统集成了从数据清洗、多智能体对抗训练、策略回测到 **端侧分布式部署** 的全链路工程，支持利用 **ZeroMQ** 搭建低延迟通信链路，并通过 **RKNN** 与 **TensorRT** 充分压榨异构硬件性能，实现毫秒级决策响应。
 
-*   **📈 全自动化数据流**：集成 Tushare Pro 接口，自动完成日线/指数/基金数据的获取、清洗、技术指标计算（MACD, KDJ, MA等）及归一化处理。
-*   **🧠 多智能体对抗训练**：
-    *   引入 **RoPE (旋转位置编码)** 增强模型时序捕捉能力。
-    *   支持无监督预训练 (CAE/t3VAE) 提取潜在特征。
-    *   多生成器 (Generator) 与多判别器 (Discriminator) 博弈，提升预测鲁棒性。
-*   **🛡️ 鲁棒的策略回测**：内置涨跌停限制、一字板过滤、止损策略等实战规则，自动评选最佳交易策略。
-*   **📊 交互式决策大屏**：基于 Dash 构建的 Web 可视化界面，提供 K 线复盘、信号标记及一键更新功能。
-*   **⚡ 端到端 NPU 部署**：
-    *   独创的 JSON 参数解耦方案，解决跨平台数据处理痛点。
-    *   支持一键批量导出 ONNX 模型。
-    *   完美适配 RKNN 工具链，实现 RK35XX NPU 硬件加速推理。
+## ✨ 核心特性 (Key Features)
 
-## 🛠️ 环境依赖 (Windows)
+### 🏗️ 分布式异构架构 (System Infra)
+*   **双机协同调度**：
+    *   **Gateway Node (RK3568)**: 负责数据清洗、特征预处理及轻量级 NPU 推理，通过 **ZeroMQ/TCP** 异步链路分发任务。
+    *   **Compute Node (Jetson)**: 负责承载重型计算任务（GAN/Transformer），利用 CUDA 核心进行并行加速。
+*   **极致性能优化**：
+    *   **异步流水线 (Asynchronous Pipeline)**: 设计环形缓冲区 (Ring Buffer) 解耦数据接收与推理，掩盖网络通信延迟。
+    *   **硬件亲和性 (Hardware Affinity)**: 利用 `taskset` 绑定 NPU 核心减少上下文切换；引入 **Numba JIT** 消除 Python GIL 瓶颈。
+    *   **双端加速**: RK3568 端打通 RKNN 全流程；Jetson 端基于 TensorRT 实现 FP16 精度量化。
 
-本项目在 **Windows 10/11** 下开发，使用 **PyCharm** 进行项目管理。
+### 🧠 算法模型 (Algorithmic Intelligence)
+*   **Multi-GAN 博弈框架**: 引入多生成器与多判别器对抗训练，解决金融时序数据的非平稳性问题。
+*   **时序特征增强**: 集成 **RoPE (旋转位置编码)** 增强长序列捕捉能力；内置 **CAE/t3-VAE** 无监督模块提取潜在市场因子。
+*   **鲁棒策略回测**: 内置实战级风控规则（涨跌停过滤、滑点模拟），自动评选最优策略 (G1/G2/G3)。
 
-### 必要版本配置
-*   **IDE**: PyCharm (推荐)
-*   **Python**: 3.11 (原生解释器)
-*   **CUDA**: 11.8 (配合 cuDNN 8.7)
-*   **PyTorch**: 2.1.2 + cu118
-
-### ⚡ 快速安装指南
-
-1.  **环境准备**
-    *   确保已安装 Python 3.11。
-    *   在 PyCharm 中打开本项目，并创建一个新的 Virtualenv 环境（基于 Python 3.11）。
-
-2.  **安装 PyTorch (使用清华镜像源)**
-    打开 PyCharm 终端 (Terminal)，运行以下命令安装指定版本的 Torch：
-    ```bash
-    pip install torch==2.1.2+cu118 -i https://pypi.tuna.tsinghua.edu.cn/simple
-    ```
-
-3.  **安装其他依赖**
-    ```bash
-    pip install pandas numpy matplotlib seaborn scikit-learn tushare dash plotly joblib onnx onnxruntime tqdm talib -i https://pypi.tuna.tsinghua.edu.cn/simple
-    ```
-    *(注：TA-Lib 在 Windows 下可能需要手动下载对应 Python 3.11 的 `.whl` 文件进行安装)*
+### 📊 全栈交互 (Interactive UI)
+*   **Dash 决策大屏**: 提供 K 线复盘、买卖信号可视化及模型性能监控。
+*   **自动化数据流**: 集成 Tushare Pro，一键完成清洗、归一化及技术指标（MACD/KDJ/MA）计算。
 
 ---
 
-## 🚀 快速开始
+## 🛠️ 硬件拓扑与环境 (Topology)
 
-### 1. 配置目标股票
-编辑根目录下的 `标的参考.txt`，按板块填入您关注的股票名称。
+### 硬件架构
+```mermaid
+graph LR
+    A[数据源/传感器] -->|UART/API| B(RK3568 Gateway)
+    B -->|NPU Pre-process| B
+    B -->|ZeroMQ/TCP Stream| C(Jetson Compute Node)
+    C -->|TensorRT Inference| C
+    C -->|Signal Publish| B
+    B -->|Web Visualization| D[用户大屏]
+```
 
-### 2. 获取数据
-运行数据获取脚本，自动下载并预处理数据。
+### 开发环境依赖
+*   **Host (训练端)**: Windows 10/11 + NVIDIA GPU (RTX 3060+)
+    *   Python 3.11, PyTorch 2.1.2+cu118
+*   **Edge Node 1 (RK3568)**: Ubuntu 20.04 / Buildroot
+    *   rknn-toolkit2-lite, python-rknnlite
+*   **Edge Node 2 (Jetson)**: JetPack 4.6+ / Ubuntu 18.04
+    *   TensorRT 8.x, PyTorch-GPU, ZeroMQ (`pyzmq`)
+
+---
+
+## 🚀 快速开始 (Quick Start)
+
+### 1. 数据准备
+配置 `标的参考.txt` 并获取 Tushare 数据。
 ```bash
 python get_stock_data.py
 ```
-*(注意：请在脚本中替换您的 Tushare Token)*
 
-### 3. 启动训练
-启动多智能体对抗训练流程。系统会自动进行预训练和主训练。
+### 2. 模型训练
+启动多智能体对抗训练（包含预训练与主训练）。
 ```bash
 python experiment_runner.py --mode train --num_epochs 100
 ```
-![训练过程截图](docs/images/training_process.png)
-*(此处建议添加训练时的 Loss 曲线或控制台输出截图)*
 
-### 4. 策略回测与筛选
-训练完成后，运行回测脚本。系统会根据交易规则筛选出表现最好的模型（G1/G2/G3...）。
+### 3. 策略回测
+筛选表现最佳的生成器策略，生成 `best_metrics.csv`。
 ```bash
 python filter_trading_signals.py
 ```
-此步骤会生成 `best_metrics.csv`，记录最佳策略的收益率和胜率。
 
-### 5. 可视化分析
-启动 Dash 仪表盘，在浏览器中查看 K 线图和模型信号。
+### 4. 启动可视化
+在本地查看训练结果与策略表现。
 ```bash
 python dash_kline_visualizer.py
 ```
-访问：`http://127.0.0.1:8050`
-
-![可视化大屏截图](docs/images/dash_ui.png)
-*(此处建议添加浏览器中 Dash K线图界面的截图)*
 
 ---
 
-## 💾 边缘端部署 (RK35XX)
+## 💾 边缘端部署流程 (Deployment)
 
-本项目支持将最佳策略模型导出并部署到 RK35XX 开发板。
+本系统核心在于将训练好的模型部署至 **异构边缘集群**。
 
-### 步骤 1：Windows 端一键导出
-运行导出脚本，通过交互式菜单选择要导出的股票（支持指令 `all` 批量导出）。
+### Phase 1: 模型导出 (Windows)
+使用部署工具将 PyTorch 模型转换为中间格式 (ONNX) 并解耦预处理参数。
 ```bash
-python deploy_export.py
+python deploy_export.py --target all
 ```
-**产出物**：`deploy_output/` 目录，包含 `model_deploy.onnx` (模型) 和 `scaler_params.json` (参数)。
+*产出：`deploy_output/` 包含 `model_gan.onnx`, `scaler_params.json`*
 
-### 步骤 2：模型转换 (Ubuntu虚拟机)
-将导出的文件夹传输至虚拟机，使用 `rknn-toolkit2` 将 ONNX 转换为 RKNN 模型（FP16精度）。
-*(注：请确保虚拟机已配置好对应 Python 版本的 RKNN 环境)*
-```bash
-# 请参考 deploy_convert_batch.py
-python deploy_convert_batch.py
-```
+### Phase 2: 模型转换与量化
+*   **For RK3568 (NPU)**: 使用 `rknn-toolkit2` 将轻量级特征提取模型转为 `.rknn` (FP16)。
+*   **For Jetson (GPU)**: 使用 `trtexec` 或 Python API 将计算密集型模型转为 `.engine` (FP16)。
+    ```bash
+    # 示例：Jetson端转换
+    trtexec --onnx=model_gan.onnx --saveEngine=model_gan_fp16.engine --fp16
+    ```
 
-### 步骤 3：板端推理
-将转换好的模型和 JSON 参数上传至 RK35XX，运行推理脚本即可实现 NPU 加速预测。
-
-![部署流程图](docs/images/deployment_flow.png)
-*(此处建议添加从 Windows 到 RK3568 的文件流转示意图)*
+### Phase 3: 分布式推理启动
+1.  **启动 Jetson 计算节点** (Consumer):
+    ```bash
+    python edge_compute_node.py --port 5555 --engine model_gan_fp16.engine
+    ```
+2.  **启动 RK3568 网关节点** (Producer):
+    ```bash
+    python edge_gateway.py --target_ip <JETSON_IP> --port 5555
+    ```
+*此时，RK3568 将通过 ZeroMQ 将预处理后的 Tensor 流式传输至 Jetson，并实时接收返回的交易信号。*
 
 ---
 
-## 📂 目录结构说明
+## 📂 目录结构
 
 ```text
-MAATRUSTED/
+HEQIS/
 ├── csv_data/                # 存放原始及预处理后的股票数据
 ├── output/                  # 训练日志、权重检查点 (Checkpoints)
-├── output_filtered_signals/ # 回测结果、最佳策略指标
-├── models/                  # 模型定义 (GRU, LSTM, Transformer, RoPE等)
-├── utils/                   # 工具类 (Logger, Trainer, Visualization)
-├── deploy_output/           # 导出的部署文件
-├── get_stock_data.py        # 数据获取
-├── experiment_runner.py     # 训练入口
-├── filter_trading_signals.py# 回测入口
-├── dash_kline_visualizer.py # 可视化大屏
-├── deploy_export.py         # 部署导出工具 (Batch版)
-└── README.md                # 项目说明
+├── output_filtered_signals/ # 回测结果、最佳策略指标 (best_metrics.csv)
+├── models/                  # 模型定义 (Multi-GAN, Transformer, RoPE, VAE等)
+├── utils/                   # 通用工具类 (Logger, Trainer, Visualization)
+├── infra/                   # [新增] 边缘计算与异构通信模块
+│   ├── zmq_utils/           # ZeroMQ 通信协议封装
+│   ├── rknn_inference/      # RK3568 NPU 推理接口
+│   └── trt_inference/       # Jetson TensorRT 推理接口
+├── deploy_output/           # 导出的部署文件 (ONNX/JSON/RKNN)
+├── get_stock_data.py        # 数据获取与清洗脚本
+├── experiment_runner.py     # 训练主程序入口
+├── filter_trading_signals.py# 策略回测与筛选入口
+├── dash_kline_visualizer.py # 可视化决策大屏
+├── deploy_export.py         # 部署文件导出工具 (Batch版)
+├── deploy_convert_batch.py  # 模型转换脚本 (ONNX -> RKNN/Engine)
+├── edge_gateway.py          # [端侧] RK3568 网关主程序 (Producer)
+├── edge_compute_node.py     # [端侧] Jetson 计算节点主程序 (Consumer)
+└── README.md                # 项目说明文档
 ```
 
 ## ⚠️ 免责声明
 
-本项目仅供计算机科学研究、深度学习算法验证及量化交易技术交流使用。**项目中的任何预测结果、信号或策略均不构成投资建议。** 金融市场风险巨大，实盘交易请自行承担风险。
+本项目仅供 **计算机系统架构研究**、**边缘计算性能验证** 及 **深度学习算法实验** 使用。
+项目中的任何预测结果、信号或策略均不构成投资建议。实盘交易风险巨大，请自行承担风险。
 
 ---
 
 ## 🤝 贡献与支持
 
-欢迎提交 Issue 或 Pull Request！
-如果是 Tushare 数据问题，请查阅 [Tushare 官方文档](https://tushare.pro/)。
+Welcome PRs! 特别欢迎关于 **CUDA 算子优化**、**RKNN 异构调度** 及 **ZeroMQ 通信效率提升** 的改进建议。
