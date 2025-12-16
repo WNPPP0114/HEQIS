@@ -13,7 +13,8 @@ graph TD
     classDef external fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,stroke-dasharray: 5 5,color:#e65100;
 
     %% 外部输入
-    Input["☁️ Market Data Source / Tushare API"]:::external
+    Input["☁️ Market Data Source"]:::external
+    Input["Tushare API"]:::external
 
     %% RK3568 网关节点
     subgraph Gateway_Node ["📍 RK3568 Gateway Node"]
