@@ -59,28 +59,24 @@ graph TD
 
 **HEQIS** (Heterogeneous Edge Quant Inference System) 是一个面向下一代边缘计算场景的分布式量化推理系统。
 
-本项目旨在解决复杂深度学习模型（Multi-GAN, Transformer）在资源受限边缘设备上难以实时部署的痛点。通过构建 **RK3568 (Gateway/NPU) + Jetson Nano (Compute/GPU)** 的双机异构集群，HEQIS 实现了算力的分级调度与极致优化。
+本项目旨在解决复杂深度学习模型（Multi-GAN, Transformer）在资源受限边缘设备上难以实时部署的痛点。通过构建 **RK3568 (I/O & System Supervisor) + Jetson Orin Nano (AI Compute Brain)** 的工业级主从架构，HEQIS 实现了算力的分级调度与极致优化。
 
 系统集成了从数据清洗、多智能体对抗训练、策略回测到 **端侧分布式部署** 的全链路工程，支持利用 **ZeroMQ** 搭建低延迟通信链路，并通过 **RKNN** 与 **TensorRT** 充分压榨异构硬件性能，实现毫秒级决策响应。
 
 ## ✨ 核心特性 (Key Features)
 
-### 🏗️ 分布式异构架构 (System Infra)
-*   **双机协同调度**：
-    *   **Gateway Node (RK3568)**: 负责数据接入、预处理及轻量级推理，通过 **ZeroMQ** 异步链路分发任务。
-    *   **Compute Node (Jetson)**: 负责承载重型计算任务，利用 CUDA 核心进行并行加速。
-*   **极致性能优化**：
-    *   **异步流水线 (Asynchronous Pipeline)**: 设计环形缓冲区 (Ring Buffer) 解耦数据接收与推理，掩盖网络通信延迟。
-    *   **硬件亲和性 (Hardware Affinity)**: 利用 `taskset` 绑定 NPU 核心减少上下文切换；引入 **Numba JIT** 消除 Python GIL 瓶颈。
-    *   **双端加速**: RK3568 端打通 RKNN 全流程；Jetson 端基于 TensorRT 实现 FP16 精度量化。
+### 🏗️ 分布式异构架构：从“算力卸载”到“功能分离”
+本项目采用 **RK3568 (I/O & System Supervisor) + Jetson Orin Nano (AI Compute Brain)** 的工业级主从架构。
+*   **AI Brain (Jetson Orin Nano)**: 专职负责所有重型计算任务，包括数据预处理和多模型并行推理，利用其 40 TOPS 的澎湃算力实现极致 AI 性能。
+*   **I/O Supervisor (RK3568)**: 作为高可靠的系统总管，专职负责多源数据聚合、协议转换、系统健康监控（Watchdog）及决策持久化，为“大脑”提供稳定、干净的数据流并保障系统7x24小时运行。
 
 ### 🎯 算力调度策略 (Workload Partitioning)
-本项目的核心设计思想在于将计算任务合理地拆分到最适合的硬件单元上，实现 `1+1 > 2` 的效果。
+新架构的核心是“关注点分离”，让每个硬件单元都做自己最擅长的事。
 
 | 硬件节点     | 承担任务                                       | 技术原因                                                                                   |
 | :----------- | :--------------------------------------------- | :----------------------------------------------------------------------------------------- |
-| **RK3568**   | 1. 数据清洗 & 归一化 (CPU) <br> 2. **技术指标计算 (NPU)** <br> 3. 轻量级特征提取 (NPU) | 任务模式固定 (等效于1D卷积)，可**量化为INT8**，完美适配NPU原生算子，实现极致**能效比**。  |
-| **Jetson**   | 1. **Transformer + RoPE (GPU)** <br> 2. **Multi-GAN 博弈 (GPU)** <br> 3. VAE 模块推理 (GPU) | **算子非标(RoPE)**，避免CPU回落风险；**精度敏感(GAN)**，必须使用FP16；依赖成熟**CUDA生态**。 |
+| **RK3568**   | 1. **多源数据聚合 & 时间戳对齐** <br> 2. **协议网关 (如Modbus)** <br> 3. **系统健康监控 (Watchdog)** | **高可靠 I/O 与实时性**：利用丰富的工业接口，保证数据采集的**确定性**，避免被 AI 任务抢占资源，并能物理重启计算节点，确保系统鲁棒性。  |
+| **Jetson Orin** | 1. **全部数据预处理 (技术指标)** <br> 2. **全部 AI 模型推理 (Transformer/GAN)** <br> 3. **多模型并发** | **极致 AI 性能**：所有计算任务均在 Orin 内部完成，数据不出内存，避免了跨设备传输 Tensor 的延迟瓶颈，充分发挥 Ampere 架构和 DLA 的优势。 |
 
 ### ⚡ 性能价值：加速策略研究与迭代
 本系统的高性能并非仅为实时交易设计，其核心价值在于**大幅缩短策略研究的周期**：
@@ -90,7 +86,7 @@ graph TD
 
 ### 🧠 算法模型 (Algorithmic Intelligence)
 *   **Multi-GAN 博弈框架**: 引入多生成器与多判别器对抗训练，解决金融时序数据的非平稳性问题。
-*   **时序特征增强**: 集成 **RoPE (旋转位置编码)** 增强长序列捕捉能力；内置 **CAE/t3-VAE** 无监督模块提取潜在市场因子。
+*   **时序特征增强**: 集成 **RoPE (旋转位置编码)** 增强长序列捕捉能力；内置 **CAE/t-VAE** 无监督模块提取潜在市场因子。
 *   **鲁棒策略回测**: 内置实战级风控规则（涨跌停过滤、滑点模拟），自动评选最优策略 (G1/G2/G3)。
 
 ### 📊 全栈交互 (Interactive UI)
@@ -108,25 +104,33 @@ graph LR
     classDef dev fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000;
     classDef ext fill:#e0e0e0,stroke:#616161,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
 
-    A["Data Source<br/>(Sensors/API)"]:::ext
-    B["RK3568 Gateway<br/>(NPU Node)"]:::dev
-    C["Jetson Compute<br/>(GPU Node)"]:::dev
+    A["Data Sources<br/>(API/Sensors/PLC)"]:::ext
+    B["RK3568 Supervisor<br/>(I/O & Watchdog)"]:::dev
+    C["Jetson Orin Nano<br/>(AI Brain)"]:::dev
     D["User Dashboard"]:::ext
 
-    A -->|UART/Ethernet| B
-    B -->|Pre-process| B
-    B ==>|ZeroMQ/TCP| C
-    C -->|Inference| C
-    C ==>|Signal| B
+    A -->|Multi-protocol| B
+    B ==>|Clean Data (ZeroMQ)| C
+    C ==>|Decision Signal| B
+    B -->|Heartbeat| C
     B -.->|Web Socket| D
+    B -.->|Hard Reset| C
 ```
+
+### 硬件选型考量 (Hardware Selection Rationale)
+本架构的硬件选型是基于“功能分离”与“战略灵活性”的深度考量，旨在构建一个高可靠且具备未来扩展性的系统。
+
+| 节点角色               | 选型                  | 核心理由                                                                                                                                                             | 替代方案 & 为何不选                                                                                                                                 |
+| :--------------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **🤖 AI Brain**        | **Jetson Orin Nano**  | **极致 AI 性能**: Ampere 架构 GPU 与 DLA 提供高达 40 TOPS 算力，轻松应对所有重型计算任务。<br>**成熟 CUDA 生态**: TensorRT 工具链完善，算子支持度高，开发与调试效率无与伦比。   | **Jetson Nano**: 性能足够入门，但 Orin 提供了面向未来的算力储备，支持更大、更复杂的模型并行推理。                                                          |
+| **🧠 I/O Supervisor** | **RK3568**            | **战略灵活性**: 自带 1 TOPS NPU 和 4K VPU，为未来部署“智能看门狗”或多模态监控预留了巨大空间。<br>**性能冗余 & 高速 I/O**: 四核 A55 确保不会成为系统瓶颈，USB 3.0/PCIe/SATA 支持高速数据持久化。 | **STM32/i.MX6ULL**: 性能太弱，软件栈复杂，在高吞吐量下必然成为瓶颈。<br>**STM32MP257**: 性能尚可，但无 NPU/VPU 等附加值，上限锁死，缺乏扩展性。 |
 
 ### 开发环境依赖
 *   **Host (训练端)**: Windows 10/11 + NVIDIA GPU (RTX 3060+)
     *   Python 3.11, PyTorch 2.1.2+cu118
 *   **Edge Node 1 (RK3568)**: Ubuntu 20.04 / Buildroot
     *   rknn-toolkit2-lite, python-rknnlite
-*   **Edge Node 2 (Jetson)**: JetPack 4.6+ / Ubuntu 18.04
+*   **Edge Node 2 (Jetson)**: JetPack 5.x/6.x / Ubuntu 20.04+
     *   TensorRT 8.x, PyTorch-GPU, ZeroMQ (`pyzmq`)
 
 ---
@@ -171,23 +175,21 @@ python deploy_export.py --target all
 *产出：`deploy_output/` 包含 `model_gan.onnx`, `scaler_params.json`*
 
 ### Phase 2: 模型转换与量化
-*   **For RK3568 (NPU)**: 使用 `rknn-toolkit2` 将轻量级特征提取模型转为 `.rknn` (FP16)。
-*   **For Jetson (GPU)**: 使用 `trtexec` 或 Python API 将计算密集型模型转为 `.engine` (FP16)。
+*   **For RK3568 (NPU)**: (可选) 使用 `rknn-toolkit2` 转换轻量级监控模型。
+*   **For Jetson Orin (GPU/DLA)**: 使用 `trtexec` 或 Python API 将计算密集型模型转为 `.engine` (FP16/INT8)。
     ```bash
     # 示例：Jetson端转换
     trtexec --onnx=model_gan.onnx --saveEngine=model_gan_fp16.engine --fp16
     ```
 
 ### Phase 3: 分布式推理启动
-1.  **启动 Jetson 计算节点** (Consumer):
+1.  **启动 Jetson 计算节点** (AI Brain):
     ```bash
     python edge_compute_node.py --port 5555 --engine model_gan_fp16.engine
-    ```
-2.  **启动 RK3568 网关节点** (Producer):
+    ```2.  **启动 RK3568 网关节点** (Supervisor):
     ```bash
     python edge_gateway.py --target_ip <JETSON_IP> --port 5555
-    ```
-*此时，RK3568 将通过 ZeroMQ 将预处理后的 Tensor 流式传输至 Jetson，并实时接收返回的交易信号。*
+    ```*此时，RK3568 将通过 ZeroMQ 将预处理后的 Tensor 流式传输至 Jetson，并实时接收返回的交易信号。*
 
 ---
 
