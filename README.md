@@ -67,12 +67,20 @@ graph TD
 
 ### 🏗️ 分布式异构架构 (System Infra)
 *   **双机协同调度**：
-    *   **Gateway Node (RK3568)**: 负责数据清洗、特征预处理及轻量级 NPU 推理，通过 **ZeroMQ/TCP** 异步链路分发任务。
-    *   **Compute Node (Jetson)**: 负责承载重型计算任务（GAN/Transformer），利用 CUDA 核心进行并行加速。
+    *   **Gateway Node (RK3568)**: 负责数据接入、预处理及轻量级推理，通过 **ZeroMQ** 异步链路分发任务。
+    *   **Compute Node (Jetson)**: 负责承载重型计算任务，利用 CUDA 核心进行并行加速。
 *   **极致性能优化**：
     *   **异步流水线 (Asynchronous Pipeline)**: 设计环形缓冲区 (Ring Buffer) 解耦数据接收与推理，掩盖网络通信延迟。
     *   **硬件亲和性 (Hardware Affinity)**: 利用 `taskset` 绑定 NPU 核心减少上下文切换；引入 **Numba JIT** 消除 Python GIL 瓶颈。
     *   **双端加速**: RK3568 端打通 RKNN 全流程；Jetson 端基于 TensorRT 实现 FP16 精度量化。
+
+### 🎯 算力调度策略 (Workload Partitioning)
+本项目的核心设计思想在于将计算任务合理地拆分到最适合的硬件单元上，实现 `1+1 > 2` 的效果。
+
+| 硬件节点     | 承担任务                                       | 技术原因                                                                                   |
+| :----------- | :--------------------------------------------- | :----------------------------------------------------------------------------------------- |
+| **RK3568**   | 1. 数据清洗 & 归一化 (CPU) <br> 2. **技术指标计算 (NPU)** <br> 3. 轻量级特征提取 (NPU) | 任务模式固定 (等效于1D卷积)，可**量化为INT8**，完美适配NPU原生算子，实现极致**能效比**。  |
+| **Jetson**   | 1. **Transformer + RoPE (GPU)** <br> 2. **Multi-GAN 博弈 (GPU)** <br> 3. VAE 模块推理 (GPU) | **算子非标(RoPE)**，避免CPU回落风险；**精度敏感(GAN)**，必须使用FP16；依赖成熟**CUDA生态**。 |
 
 ### 🧠 算法模型 (Algorithmic Intelligence)
 *   **Multi-GAN 博弈框架**: 引入多生成器与多判别器对抗训练，解决金融时序数据的非平稳性问题。
