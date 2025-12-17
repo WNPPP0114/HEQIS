@@ -105,7 +105,7 @@ graph LR
     classDef ext fill:#e0e0e0,stroke:#616161,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
 
     A["Data Sources<br/>(API/Sensors/PLC)"]:::ext
-    B["RK3-568 Supervisor<br/>(I/O & Watchdog)"]:::dev
+    B["RK3568 Supervisor<br/>(I/O & Watchdog)"]:::dev
     C["Jetson Orin Nano<br/>(AI Brain)"]:::dev
     D["User Dashboard"]:::ext
 
