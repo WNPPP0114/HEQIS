@@ -105,16 +105,17 @@ graph LR
     classDef ext fill:#e0e0e0,stroke:#616161,stroke-width:2px,stroke-dasharray: 5 5,color:#000;
 
     A["Data Sources<br/>(API/Sensors/PLC)"]:::ext
-    B["RK3568 Supervisor<br/>(I/O & Watchdog)"]:::dev
+    B["RK3-568 Supervisor<br/>(I/O & Watchdog)"]:::dev
     C["Jetson Orin Nano<br/>(AI Brain)"]:::dev
     D["User Dashboard"]:::ext
 
     A -->|Multi-protocol| B
-    B ==>|Clean Data (ZeroMQ)| C
-    C ==>|Decision Signal| B
-    B -->|Heartbeat| C
-    B -.->|Web Socket| D
-    B -.->|Hard Reset| C
+    %% 为链接文本加上双引号，避免括号解析错误
+    B ==>|"Clean Data (ZeroMQ)"| C
+    C ==>|"Decision Signal"| B
+    B -->|"Heartbeat"| C
+    B -.->|"Web Socket"| D
+    B -.->|"Hard Reset"| C
 ```
 
 ### 硬件选型考量 (Hardware Selection Rationale)
