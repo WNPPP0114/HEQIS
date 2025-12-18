@@ -196,7 +196,7 @@ python deploy_export.py --target all
 
 ---
 
-## 📂 目录结构
+## 📂 主要目录结构
 
 ```text
 HEQIS/
@@ -210,7 +210,6 @@ HEQIS/
 │   ├── rknn_inference/      # RK3568 NPU 推理接口
 │   └── trt_inference/       # Jetson TensorRT 推理接口
 ├── deploy_output/           # 导出的部署文件 (ONNX/JSON/RKNN)
-└── 文献/                     # 算法模型参考文献
 ├── get_stock_data.py        # 数据获取与清洗脚本
 ├── experiment_runner.py     # 训练主程序入口
 ├── filter_trading_signals.py# 策略回测与筛选入口
