@@ -187,10 +187,12 @@ python deploy_export.py --target all
 1.  **启动 Jetson 计算节点** (AI Brain):
     ```bash
     python edge_compute_node.py --port 5555 --engine model_gan_fp16.engine
-    ```2.  **启动 RK3568 网关节点** (Supervisor):
+    ```
+2.  **启动 RK3568 网关节点** (Supervisor):
     ```bash
     python edge_gateway.py --target_ip <JETSON_IP> --port 5555
-    ```*此时，RK3568 将通过 ZeroMQ 将预处理后的 Tensor 流式传输至 Jetson，并实时接收返回的交易信号。*
+    ```
+    *此时，RK3568 将通过 ZeroMQ 将预处理后的 Tensor 流式传输至 Jetson，并实时接收返回的交易信号。*
 
 ---
 
