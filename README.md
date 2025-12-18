@@ -200,6 +200,7 @@ python deploy_export.py --target all
 
 ```text
 HEQIS/
+└── references/              # 算法模型参考文献
 ├── csv_data/                # 存放原始及预处理后的股票数据
 ├── output/                  # 训练日志、权重检查点 (Checkpoints)
 ├── output_filtered_signals/ # 回测结果、最佳策略指标 (best_metrics.csv)
